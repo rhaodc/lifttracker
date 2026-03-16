@@ -674,7 +674,11 @@ class _HomeScreenState extends State<HomeScreen>
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => WorkoutDetailScreen(workout: workout),
+                builder: (_) => WorkoutDetailScreen(
+                  workout: workout,
+                  profile: widget.profile,
+                  onChanged: widget.onChanged,
+                ),
               ),
             ),
           ),
@@ -1530,47 +1534,91 @@ class _ExercisePickerDialogState extends State<_ExercisePickerDialog> {
 
 // ─── Workout Detail Screen ────────────────────────────────────────────────────
 
-class WorkoutDetailScreen extends StatelessWidget {
+class WorkoutDetailScreen extends StatefulWidget {
   final Workout workout;
+  final Profile profile;
+  final VoidCallback onChanged;
 
-  const WorkoutDetailScreen({super.key, required this.workout});
+  const WorkoutDetailScreen({
+    super.key,
+    required this.workout,
+    required this.profile,
+    required this.onChanged,
+  });
 
+  @override
+  State<WorkoutDetailScreen> createState() => _WorkoutDetailScreenState();
+}
+
+class _WorkoutDetailScreenState extends State<WorkoutDetailScreen> {
   String _fmt(DateTime d) {
     const m = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
     return '${m[d.month - 1]} ${d.day}, ${d.year}';
+  }
+
+  void _deleteWorkout() {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Delete workout?'),
+        content: Text('Remove this ${widget.workout.type.label} workout from ${_fmt(widget.workout.date)}?'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () {
+              Navigator.pop(context);
+              widget.profile.workouts.remove(widget.workout);
+              widget.onChanged();
+              Navigator.pop(context);
+            },
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _deleteExercise(WorkoutExercise ex) {
+    setState(() => widget.workout.exercises.remove(ex));
+    widget.onChanged();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(_fmt(workout.date),
+        title: Text(_fmt(widget.workout.date),
             style: const TextStyle(fontWeight: FontWeight.bold)),
         centerTitle: true,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+            onPressed: _deleteWorkout,
+          ),
+        ],
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          // Type + time cap chips
           Wrap(
             spacing: 8,
             children: [
-              Chip(label: Text(workout.type.label)),
-              if (workout.timeCap != null)
-                Chip(label: Text('${workout.timeCap} min')),
+              Chip(label: Text(widget.workout.type.label)),
+              if (widget.workout.timeCap != null)
+                Chip(label: Text('${widget.workout.timeCap} min')),
             ],
           ),
-          // Result
-          if (workout.result != null && workout.result!.isNotEmpty) ...[
+          if (widget.workout.result != null && widget.workout.result!.isNotEmpty) ...[
             const SizedBox(height: 12),
             Card(
               child: ListTile(
-                leading: const Icon(Icons.emoji_events_outlined,
-                    color: Colors.amber),
-                title: Text(workout.result!,
-                    style: const TextStyle(
-                        fontSize: 18, fontWeight: FontWeight.bold)),
-                subtitle: Text(switch (workout.type) {
+                leading: const Icon(Icons.emoji_events_outlined, color: Colors.amber),
+                title: Text(widget.workout.result!,
+                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                subtitle: Text(switch (widget.workout.type) {
                   WorkoutType.amrap => 'Rounds Completed',
                   WorkoutType.emom => 'Completed',
                   WorkoutType.forTime => 'Completion Time',
@@ -1580,14 +1628,13 @@ class WorkoutDetailScreen extends StatelessWidget {
             ),
           ],
           const SizedBox(height: 16),
-          // Exercises
-          ...workout.exercises.map((ex) => _buildExerciseCard(context, ex)),
+          ...widget.workout.exercises.map((ex) => _buildExerciseCard(ex)),
         ],
       ),
     );
   }
 
-  Widget _buildExerciseCard(BuildContext context, WorkoutExercise ex) {
+  Widget _buildExerciseCard(WorkoutExercise ex) {
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       child: Padding(
@@ -1595,14 +1642,23 @@ class WorkoutDetailScreen extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(ex.liftName,
-                style: const TextStyle(
-                    fontSize: 17, fontWeight: FontWeight.bold)),
+            Row(children: [
+              Expanded(
+                child: Text(ex.liftName,
+                    style: const TextStyle(
+                        fontSize: 17, fontWeight: FontWeight.bold)),
+              ),
+              IconButton(
+                icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 20),
+                onPressed: () => _deleteExercise(ex),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+              ),
+            ]),
             const SizedBox(height: 8),
-            if (workout.type == WorkoutType.strength) ...[
+            if (widget.workout.type == WorkoutType.strength) ...[
               if (ex.sets.isEmpty)
-                const Text('No sets logged',
-                    style: TextStyle(color: Colors.white54))
+                const Text('No sets logged', style: TextStyle(color: Colors.white54))
               else ...[
                 const Row(children: [
                   SizedBox(width: 36, child: Text('Set', style: TextStyle(fontSize: 12, color: Colors.white54))),
@@ -1638,8 +1694,7 @@ class WorkoutDetailScreen extends StatelessWidget {
               ],
             ] else ...[
               Row(children: [
-                Text('${ex.reps} reps',
-                    style: const TextStyle(fontSize: 15)),
+                Text('${ex.reps} reps', style: const TextStyle(fontSize: 15)),
                 if (ex.weight != null) ...[
                   const SizedBox(width: 16),
                   Text(
