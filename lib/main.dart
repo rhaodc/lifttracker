@@ -1,4 +1,7 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:image/image.dart' as img;
 import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'firebase_options.dart';
@@ -66,15 +69,26 @@ class Profile {
   String name;
   List<Lift> lifts;
   List<Workout> workouts;
+  List<String> goals;
+  String? photoData; // base64 data URL
 
-  Profile({this.id, required this.name, List<Lift>? lifts, List<Workout>? workouts})
-      : lifts = lifts ?? [],
-        workouts = workouts ?? [];
+  Profile({
+    this.id,
+    required this.name,
+    List<Lift>? lifts,
+    List<Workout>? workouts,
+    List<String>? goals,
+    this.photoData,
+  })  : lifts = lifts ?? [],
+        workouts = workouts ?? [],
+        goals = goals ?? [];
 
   Map<String, dynamic> toJson() => {
         'name': name,
         'lifts': lifts.map((l) => l.toJson()).toList(),
         'workouts': workouts.map((w) => w.toJson()).toList(),
+        'goals': goals,
+        if (photoData != null) 'photoData': photoData,
       };
 
   factory Profile.fromJson(Map<String, dynamic> j, {String? id}) => Profile(
@@ -86,6 +100,10 @@ class Profile {
         workouts: (j['workouts'] as List<dynamic>? ?? [])
             .map((e) => Workout.fromJson(e as Map<String, dynamic>))
             .toList(),
+        goals: (j['goals'] as List<dynamic>? ?? [])
+            .map((e) => e as String)
+            .toList(),
+        photoData: j['photoData'] as String?,
       );
 }
 
@@ -342,8 +360,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
           }
           return GridView.builder(
             padding: const EdgeInsets.all(20),
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 2,
+            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+              maxCrossAxisExtent: 200,
               mainAxisSpacing: 16,
               crossAxisSpacing: 16,
               childAspectRatio: 1,
@@ -371,16 +389,21 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         radius: 36,
                         backgroundColor:
                             Theme.of(context).colorScheme.primaryContainer,
-                        child: Text(
-                          _initials(profile.name),
-                          style: TextStyle(
-                            fontSize: 24,
-                            fontWeight: FontWeight.bold,
-                            color: Theme.of(context)
-                                .colorScheme
-                                .onPrimaryContainer,
-                          ),
-                        ),
+                        backgroundImage: profile.photoData != null
+                            ? NetworkImage(profile.photoData!)
+                            : null,
+                        child: profile.photoData == null
+                            ? Text(
+                                _initials(profile.name),
+                                style: TextStyle(
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.bold,
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onPrimaryContainer,
+                                ),
+                              )
+                            : null,
                       ),
                       const SizedBox(height: 12),
                       Text(
@@ -434,7 +457,7 @@ class _HomeScreenState extends State<HomeScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
+    _tabController = TabController(length: 3, vsync: this);
     _tabController.addListener(() => setState(() {}));
   }
 
@@ -447,6 +470,12 @@ class _HomeScreenState extends State<HomeScreen>
   String _fmtDate(DateTime d) {
     const m = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
     return '${m[d.month - 1]} ${d.day}, ${d.year}';
+  }
+
+  String _initials(String name) {
+    final parts = name.trim().split(' ');
+    if (parts.length >= 2) return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
+    return name.substring(0, name.length >= 2 ? 2 : 1).toUpperCase();
   }
 
   void _logWorkout() {
@@ -544,6 +573,7 @@ class _HomeScreenState extends State<HomeScreen>
         bottom: TabBar(
           controller: _tabController,
           tabs: const [
+            Tab(text: 'Dashboard'),
             Tab(text: 'Personal Lifts'),
             Tab(text: 'Workouts'),
           ],
@@ -551,19 +581,339 @@ class _HomeScreenState extends State<HomeScreen>
       ),
       body: TabBarView(
         controller: _tabController,
-        children: [_buildLiftsTab(), _buildWorkoutsTab()],
+        children: [_buildDashboardTab(), _buildLiftsTab(), _buildWorkoutsTab()],
       ),
-      floatingActionButton: _tabController.index == 0
+      floatingActionButton: _tabController.index == 1
           ? FloatingActionButton.extended(
               onPressed: _addLift,
               icon: const Icon(Icons.add),
               label: const Text('Add Lift'),
             )
-          : FloatingActionButton.extended(
-              onPressed: _logWorkout,
-              icon: const Icon(Icons.fitness_center),
-              label: const Text('Log Workout'),
+          : _tabController.index == 2
+              ? FloatingActionButton.extended(
+                  onPressed: _logWorkout,
+                  icon: const Icon(Icons.fitness_center),
+                  label: const Text('Log Workout'),
+                )
+              : null,
+    );
+  }
+
+  static const _quotes = [
+    '"The only bad workout is the one that didn\'t happen."',
+    '"Strength does not come from the body. It comes from the will of the soul."',
+    '"Push yourself because no one else is going to do it for you."',
+    '"Every rep, every set, every step counts."',
+    '"Your body can stand almost anything. It\'s your mind you have to convince."',
+    '"You don\'t have to be great to start, but you have to start to be great."',
+    '"Train insane or remain the same."',
+    '"The pain you feel today will be the strength you feel tomorrow."',
+    '"Results happen over time, not overnight. Work hard, stay consistent."',
+    '"Don\'t limit your challenges. Challenge your limits."',
+  ];
+
+  Future<void> _pickPhoto() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.image,
+      withData: true,
+    );
+    if (result == null || result.files.isEmpty) return;
+    var bytes = result.files.first.bytes;
+    if (bytes == null) return;
+
+    // Auto-compress if over 700 KB
+    if (bytes.lengthInBytes > 700 * 1024) {
+      final decoded = img.decodeImage(bytes);
+      if (decoded == null) return;
+      // Scale down so the longest side is at most 512 px
+      final resized = decoded.width >= decoded.height
+          ? img.copyResize(decoded, width: 512)
+          : img.copyResize(decoded, height: 512);
+      // Re-encode as JPEG, reducing quality until under 700 KB
+      int quality = 85;
+      var compressed = img.encodeJpg(resized, quality: quality);
+      while (compressed.length > 700 * 1024 && quality > 30) {
+        quality -= 10;
+        compressed = img.encodeJpg(resized, quality: quality);
+      }
+      bytes = compressed;
+    }
+
+    final dataUrl = 'data:image/jpeg;base64,${base64Encode(bytes)}';
+    setState(() => widget.profile.photoData = dataUrl);
+    widget.onChanged();
+  }
+
+  void _addGoal() {
+    final ctrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Add Goal'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          textCapitalization: TextCapitalization.sentences,
+          decoration: const InputDecoration(hintText: 'e.g. Squat 315 lbs'),
+          onSubmitted: (_) => _confirmGoal(ctrl.text),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () => _confirmGoal(ctrl.text),
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _confirmGoal(String text) {
+    text = text.trim();
+    if (text.isEmpty) return;
+    Navigator.pop(context);
+    setState(() => widget.profile.goals.add(text));
+    widget.onChanged();
+  }
+
+  void _removeGoal(int index) {
+    setState(() => widget.profile.goals.removeAt(index));
+    widget.onChanged();
+  }
+
+  Widget _buildDashboardTab() {
+    final hour = DateTime.now().hour;
+    final greeting = hour < 12
+        ? 'Good morning'
+        : hour < 17
+            ? 'Good afternoon'
+            : 'Good evening';
+
+    final dayOfYear =
+        DateTime.now().difference(DateTime(DateTime.now().year, 1, 1)).inDays;
+    final quote = _quotes[dayOfYear % _quotes.length];
+
+    RepRecord? mostRecent;
+    String? mostRecentName;
+    int? mostRecentReps;
+    for (final lift in widget.profile.lifts) {
+      for (final entry in lift.bests.entries) {
+        if (mostRecent == null || entry.value.date.isAfter(mostRecent.date)) {
+          mostRecent = entry.value;
+          mostRecentName = lift.name;
+          mostRecentReps = entry.key;
+        }
+      }
+    }
+
+    final photoData = widget.profile.photoData;
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(20, 32, 20, 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          // Greeting
+          Text(
+            '$greeting,',
+            style: const TextStyle(fontSize: 16, color: Colors.white60),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 8),
+          // Photo + Name row
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              GestureDetector(
+                onTap: _pickPhoto,
+                child: Stack(
+                  alignment: Alignment.bottomRight,
+                  children: [
+                    CircleAvatar(
+                      radius: 28,
+                      backgroundColor:
+                          Theme.of(context).colorScheme.primaryContainer,
+                      backgroundImage: photoData != null
+                          ? NetworkImage(photoData)
+                          : null,
+                      child: photoData == null
+                          ? Text(
+                              _initials(widget.profile.name),
+                              style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onPrimaryContainer,
+                              ),
+                            )
+                          : null,
+                    ),
+                    CircleAvatar(
+                      radius: 10,
+                      backgroundColor:
+                          Theme.of(context).colorScheme.surface,
+                      child: Icon(Icons.camera_alt,
+                          size: 12,
+                          color: Theme.of(context).colorScheme.primary),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 14),
+              Text(
+                widget.profile.name,
+                style: const TextStyle(
+                    fontSize: 30, fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          // Quote
+          Text(
+            quote,
+            style: const TextStyle(
+                fontSize: 14,
+                color: Colors.white54,
+                fontStyle: FontStyle.italic),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 28),
+          // Equal-height cards
+          IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // Most Recent Lift
+                Expanded(
+                  child: Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(children: [
+                            Icon(Icons.fitness_center,
+                                size: 16,
+                                color: Theme.of(context).colorScheme.primary),
+                            const SizedBox(width: 6),
+                            const Text('Recent Lift',
+                                style: TextStyle(
+                                    fontSize: 12, color: Colors.white54)),
+                          ]),
+                          const SizedBox(height: 12),
+                          if (mostRecent == null)
+                            const Text('No lifts logged yet.',
+                                style: TextStyle(
+                                    fontSize: 13, color: Colors.white54))
+                          else ...[
+                            Text(mostRecentName!,
+                                style: const TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold),
+                                overflow: TextOverflow.ellipsis),
+                            const SizedBox(height: 4),
+                            Text(
+                              () {
+                                final w = mostRecent!.weight % 1 == 0
+                                    ? mostRecent.weight.toInt().toString()
+                                    : mostRecent.weight.toStringAsFixed(1);
+                                return '${mostRecentReps}RM  ·  $w ${mostRecent.unit}';
+                              }(),
+                              style: TextStyle(
+                                  fontSize: 14,
+                                  color:
+                                      Theme.of(context).colorScheme.primary),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              _fmtDate(mostRecent.date),
+                              style: const TextStyle(
+                                  fontSize: 12, color: Colors.white38),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                // Goals
+                Expanded(
+                  child: Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(Icons.flag_outlined,
+                                  size: 16,
+                                  color:
+                                      Theme.of(context).colorScheme.primary),
+                              const SizedBox(width: 6),
+                              const Expanded(
+                                child: Text('Goals',
+                                    style: TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.white54)),
+                              ),
+                              GestureDetector(
+                                onTap: _addGoal,
+                                child: Icon(Icons.add_circle_outline,
+                                    size: 18,
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .primary),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          if (widget.profile.goals.isEmpty)
+                            const Text('No goals set.\nTap + to add one.',
+                                style: TextStyle(
+                                    fontSize: 13, color: Colors.white54))
+                          else
+                            ...widget.profile.goals.asMap().entries.map(
+                                  (e) => Padding(
+                                    padding: const EdgeInsets.only(bottom: 8),
+                                    child: Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        const Text('• ',
+                                            style: TextStyle(
+                                                color: Colors.white70)),
+                                        Expanded(
+                                          child: Text(e.value,
+                                              style: const TextStyle(
+                                                  fontSize: 13,
+                                                  color: Colors.white70)),
+                                        ),
+                                        GestureDetector(
+                                          onTap: () => _removeGoal(e.key),
+                                          child: const Icon(Icons.close,
+                                              size: 14,
+                                              color: Colors.white38),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -733,7 +1083,7 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
           : '',
     );
     String unit = existing?.unit ?? 'lbs';
-    if (existing != null) _selectedDate = existing.date;
+    DateTime selectedDate = existing?.date ?? _selectedDate;
 
     showModalBottomSheet(
       context: context,
@@ -755,7 +1105,21 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
                     const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
                 textAlign: TextAlign.center,
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                icon: const Icon(Icons.calendar_today_outlined, size: 16),
+                label: Text(_formatDate(selectedDate)),
+                onPressed: () async {
+                  final picked = await showDatePicker(
+                    context: ctx,
+                    initialDate: selectedDate,
+                    firstDate: DateTime(2000),
+                    lastDate: DateTime.now(),
+                  );
+                  if (picked != null) setModalState(() => selectedDate = picked);
+                },
+              ),
+              const SizedBox(height: 16),
               const Text('Reps',
                   style: TextStyle(color: Colors.white60, fontSize: 13)),
               const SizedBox(height: 8),
@@ -822,11 +1186,12 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
                   if (w == null || w <= 0) return;
                   Navigator.pop(ctx);
                   setState(() {
+                    _selectedDate = selectedDate;
                     widget.lift.bests[selectedReps] = RepRecord(
                       reps: selectedReps,
                       weight: w,
                       unit: unit,
-                      date: _selectedDate,
+                      date: selectedDate,
                     );
                   });
                   widget.onChanged();
@@ -1058,6 +1423,7 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
     int selectedReps = 5;
     final weightCtrl = TextEditingController();
     String unit = 'lbs';
+    DateTime setDate = _date;
 
     showModalBottomSheet(
       context: context,
@@ -1077,7 +1443,21 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
                   style: const TextStyle(
                       fontSize: 20, fontWeight: FontWeight.bold),
                   textAlign: TextAlign.center),
-              const SizedBox(height: 24),
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                icon: const Icon(Icons.calendar_today_outlined, size: 16),
+                label: Text(_fmt(setDate)),
+                onPressed: () async {
+                  final picked = await showDatePicker(
+                    context: ctx,
+                    initialDate: setDate,
+                    firstDate: DateTime(2000),
+                    lastDate: DateTime.now(),
+                  );
+                  if (picked != null) setModal(() => setDate = picked);
+                },
+              ),
+              const SizedBox(height: 16),
               const Text('Reps',
                   style: TextStyle(color: Colors.white60, fontSize: 13)),
               const SizedBox(height: 8),
