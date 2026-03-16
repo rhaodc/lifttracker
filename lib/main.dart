@@ -106,16 +106,38 @@ class WorkoutSet {
       );
 }
 
-class WorkoutExercise {
-  final String liftName;
-  final List<WorkoutSet> sets;
+enum WorkoutType {
+  strength, amrap, emom, forTime;
 
-  WorkoutExercise({required this.liftName, List<WorkoutSet>? sets})
-      : sets = sets ?? [];
+  String get label => switch (this) {
+        WorkoutType.strength => 'Strength',
+        WorkoutType.amrap => 'AMRAP',
+        WorkoutType.emom => 'EMOM',
+        WorkoutType.forTime => 'For Time',
+      };
+}
+
+class WorkoutExercise {
+  String liftName;
+  List<WorkoutSet> sets; // strength
+  int reps;             // functional
+  double? weight;       // functional (optional)
+  String unit;
+
+  WorkoutExercise({
+    required this.liftName,
+    List<WorkoutSet>? sets,
+    this.reps = 10,
+    this.weight,
+    this.unit = 'lbs',
+  }) : sets = sets ?? [];
 
   Map<String, dynamic> toJson() => {
         'liftName': liftName,
         'sets': sets.map((s) => s.toJson()).toList(),
+        'reps': reps,
+        if (weight != null) 'weight': weight,
+        'unit': unit,
       };
 
   factory WorkoutExercise.fromJson(Map<String, dynamic> j) => WorkoutExercise(
@@ -123,23 +145,39 @@ class WorkoutExercise {
         sets: (j['sets'] as List<dynamic>? ?? [])
             .map((e) => WorkoutSet.fromJson(e as Map<String, dynamic>))
             .toList(),
+        reps: j['reps'] as int? ?? 10,
+        weight: (j['weight'] as num?)?.toDouble(),
+        unit: j['unit'] as String? ?? 'lbs',
       );
 }
 
 class Workout {
   DateTime date;
+  WorkoutType type;
+  int? timeCap; // minutes
   List<WorkoutExercise> exercises;
 
-  Workout({required this.date, List<WorkoutExercise>? exercises})
-      : exercises = exercises ?? [];
+  Workout({
+    required this.date,
+    this.type = WorkoutType.strength,
+    this.timeCap,
+    List<WorkoutExercise>? exercises,
+  }) : exercises = exercises ?? [];
 
   Map<String, dynamic> toJson() => {
         'date': date.toIso8601String(),
+        'type': type.name,
+        if (timeCap != null) 'timeCap': timeCap,
         'exercises': exercises.map((e) => e.toJson()).toList(),
       };
 
   factory Workout.fromJson(Map<String, dynamic> j) => Workout(
         date: DateTime.parse(j['date'] as String),
+        type: WorkoutType.values.firstWhere(
+          (t) => t.name == (j['type'] as String? ?? 'strength'),
+          orElse: () => WorkoutType.strength,
+        ),
+        timeCap: j['timeCap'] as int?,
         exercises: (j['exercises'] as List<dynamic>? ?? [])
             .map((e) => WorkoutExercise.fromJson(e as Map<String, dynamic>))
             .toList(),
@@ -601,25 +639,37 @@ class _HomeScreenState extends State<HomeScreen>
       itemBuilder: (_, i) {
         final workout = sorted[i];
         final exerciseNames = workout.exercises.map((e) => e.liftName).join(' · ');
-        final totalSets =
-            workout.exercises.fold(0, (acc, e) => acc + e.sets.length);
         return Card(
           margin: EdgeInsets.zero,
           child: ListTile(
             contentPadding:
                 const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            title: Text(_fmtDate(workout.date),
-                style: const TextStyle(
-                    fontSize: 16, fontWeight: FontWeight.w600)),
+            title: Row(children: [
+              Text(_fmtDate(workout.date),
+                  style: const TextStyle(
+                      fontSize: 16, fontWeight: FontWeight.w600)),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.primaryContainer,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(workout.type.label,
+                    style: TextStyle(
+                        fontSize: 11,
+                        color: Theme.of(context).colorScheme.onPrimaryContainer)),
+              ),
+            ]),
             subtitle: Text(
               exerciseNames.isEmpty ? 'No exercises' : exerciseNames,
               style: const TextStyle(fontSize: 13, color: Colors.white60),
               overflow: TextOverflow.ellipsis,
             ),
-            trailing: Text(
-              '$totalSets set${totalSets == 1 ? '' : 's'}',
-              style: const TextStyle(fontSize: 13, color: Colors.white54),
-            ),
+            trailing: workout.timeCap != null
+                ? Text('${workout.timeCap} min',
+                    style: const TextStyle(fontSize: 13, color: Colors.white54))
+                : null,
           ),
         );
       },
@@ -900,8 +950,21 @@ class WorkoutScreen extends StatefulWidget {
 
 class _WorkoutScreenState extends State<WorkoutScreen> {
   DateTime _date = DateTime.now();
+  WorkoutType _type = WorkoutType.strength;
+  final _timeCtrl = TextEditingController();
   final List<WorkoutExercise> _exercises = [];
+  final Map<String, TextEditingController> _repsCtrl = {};
+  final Map<String, TextEditingController> _weightCtrl = {};
+  final Map<String, String> _unitSel = {};
   static const _repOptions = [1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20];
+
+  @override
+  void dispose() {
+    _timeCtrl.dispose();
+    for (final c in _repsCtrl.values) { c.dispose(); }
+    for (final c in _weightCtrl.values) { c.dispose(); }
+    super.dispose();
+  }
 
   String _fmt(DateTime d) {
     const m = [
@@ -921,25 +984,42 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
     if (picked != null) setState(() => _date = picked);
   }
 
-  void _addExercises() {
+  void _addExercise(String name) {
+    if (_exercises.any((e) => e.liftName == name)) return;
+    setState(() {
+      _exercises.add(WorkoutExercise(liftName: name));
+      _repsCtrl[name] = TextEditingController(text: '10');
+      _weightCtrl[name] = TextEditingController();
+      _unitSel[name] = 'lbs';
+    });
+  }
+
+  void _removeExercise(int i) {
+    final name = _exercises[i].liftName;
+    setState(() {
+      _exercises.removeAt(i);
+      _repsCtrl.remove(name)?.dispose();
+      _weightCtrl.remove(name)?.dispose();
+      _unitSel.remove(name);
+    });
+  }
+
+  void _openExercisePicker() {
     final already = _exercises.map((e) => e.liftName).toSet();
-    final available =
-        widget.profile.lifts.where((l) => !already.contains(l.name)).toList();
-    if (available.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('All lifts already added.')),
-      );
-      return;
-    }
     showDialog(
       context: context,
       builder: (_) => _ExercisePickerDialog(
-        lifts: available,
-        onSelected: (selected) => setState(() {
-          for (final l in selected) {
-            _exercises.add(WorkoutExercise(liftName: l.name));
+        existingLifts: widget.profile.lifts,
+        alreadyAdded: already,
+        onConfirm: (names, newNames) {
+          for (final name in newNames) {
+            widget.profile.lifts.add(Lift(name: name));
           }
-        }),
+          if (newNames.isNotEmpty) widget.onSaved();
+          for (final name in names) {
+            _addExercise(name);
+          }
+        },
       ),
     );
   }
@@ -963,12 +1043,10 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text(
-                'Log Set — ${exercise.liftName}',
-                style:
-                    const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                textAlign: TextAlign.center,
-              ),
+              Text('Log Set — ${exercise.liftName}',
+                  style: const TextStyle(
+                      fontSize: 20, fontWeight: FontWeight.bold),
+                  textAlign: TextAlign.center),
               const SizedBox(height: 24),
               const Text('Reps',
                   style: TextStyle(color: Colors.white60, fontSize: 13)),
@@ -990,13 +1068,10 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
                         borderRadius: BorderRadius.circular(10),
                       ),
                       alignment: Alignment.center,
-                      child: Text(
-                        '$r',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w600,
-                          color: sel ? Colors.white : Colors.white70,
-                        ),
-                      ),
+                      child: Text('$r',
+                          style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              color: sel ? Colors.white : Colors.white70)),
                     ),
                   );
                 }).toList(),
@@ -1012,9 +1087,7 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
                       keyboardType: const TextInputType.numberWithOptions(
                           decimal: true),
                       decoration: const InputDecoration(
-                        labelText: 'Weight',
-                        border: OutlineInputBorder(),
-                      ),
+                          labelText: 'Weight', border: OutlineInputBorder()),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -1035,8 +1108,8 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
                   final w = double.tryParse(weightCtrl.text.trim());
                   if (w == null || w <= 0) return;
                   Navigator.pop(ctx);
-                  setState(() => exercise.sets
-                      .add(WorkoutSet(reps: selectedReps, weight: w, unit: unit)));
+                  setState(() => exercise.sets.add(
+                      WorkoutSet(reps: selectedReps, weight: w, unit: unit)));
                 },
                 child: const Text('Add Set', style: TextStyle(fontSize: 16)),
               ),
@@ -1048,17 +1121,37 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
   }
 
   void _save() {
-    widget.profile.workouts.add(Workout(date: _date, exercises: _exercises));
+    for (final ex in _exercises) {
+      if (_type != WorkoutType.strength) {
+        ex.reps = int.tryParse(_repsCtrl[ex.liftName]?.text ?? '') ?? ex.reps;
+        ex.weight =
+            double.tryParse(_weightCtrl[ex.liftName]?.text.trim() ?? '');
+        ex.unit = _unitSel[ex.liftName] ?? 'lbs';
+      }
+    }
+    widget.profile.workouts.add(Workout(
+      date: _date,
+      type: _type,
+      timeCap: int.tryParse(_timeCtrl.text.trim()),
+      exercises: _exercises,
+    ));
     widget.onSaved();
     Navigator.pop(context);
   }
+
+  String get _timeLabel => switch (_type) {
+        WorkoutType.amrap => 'Time Cap (min)',
+        WorkoutType.emom => 'Duration (min)',
+        WorkoutType.forTime => 'Time to Complete (min)',
+        _ => '',
+      };
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title:
-            const Text('New Workout', style: TextStyle(fontWeight: FontWeight.bold)),
+        title: const Text('New Workout',
+            style: TextStyle(fontWeight: FontWeight.bold)),
         centerTitle: true,
         actions: [
           TextButton(
@@ -1071,6 +1164,7 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          // Date
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
             child: OutlinedButton.icon(
@@ -1080,6 +1174,38 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
               style: OutlinedButton.styleFrom(alignment: Alignment.centerLeft),
             ),
           ),
+          // Workout type chips
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: WorkoutType.values.map((t) => Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: ChoiceChip(
+                    label: Text(t.label),
+                    selected: _type == t,
+                    onSelected: (_) => setState(() => _type = t),
+                  ),
+                )).toList(),
+              ),
+            ),
+          ),
+          // Time field (functional workouts only)
+          if (_type != WorkoutType.strength)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+              child: TextField(
+                controller: _timeCtrl,
+                keyboardType: TextInputType.number,
+                decoration: InputDecoration(
+                  labelText: _timeLabel,
+                  border: const OutlineInputBorder(),
+                  suffixText: 'min',
+                ),
+              ),
+            ),
+          // Exercise list
           Expanded(
             child: _exercises.isEmpty
                 ? const Center(
@@ -1093,128 +1219,166 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
                     padding: const EdgeInsets.all(16),
                     itemCount: _exercises.length,
                     separatorBuilder: (_, _) => const SizedBox(height: 12),
-                    itemBuilder: (_, i) {
-                      final ex = _exercises[i];
-                      return Card(
-                        margin: EdgeInsets.zero,
-                        child: Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      ex.liftName,
-                                      style: const TextStyle(
-                                          fontSize: 17,
-                                          fontWeight: FontWeight.bold),
-                                    ),
-                                  ),
-                                  IconButton(
-                                    icon: const Icon(Icons.close, size: 20),
-                                    onPressed: () =>
-                                        setState(() => _exercises.removeAt(i)),
-                                    padding: EdgeInsets.zero,
-                                    constraints: const BoxConstraints(),
-                                  ),
-                                ],
-                              ),
-                              if (ex.sets.isNotEmpty) ...[
-                                const SizedBox(height: 8),
-                                const Row(
-                                  children: [
-                                    SizedBox(
-                                        width: 36,
-                                        child: Text('Set',
-                                            style: TextStyle(
-                                                fontSize: 12,
-                                                color: Colors.white54))),
-                                    SizedBox(width: 8),
-                                    SizedBox(
-                                        width: 52,
-                                        child: Text('Reps',
-                                            style: TextStyle(
-                                                fontSize: 12,
-                                                color: Colors.white54))),
-                                    SizedBox(width: 8),
-                                    Text('Weight',
-                                        style: TextStyle(
-                                            fontSize: 12,
-                                            color: Colors.white54)),
-                                  ],
-                                ),
-                                const SizedBox(height: 4),
-                                ...ex.sets.asMap().entries.map((e) {
-                                  final idx = e.key;
-                                  final s = e.value;
-                                  final w = s.weight % 1 == 0
-                                      ? s.weight.toInt().toString()
-                                      : s.weight.toStringAsFixed(1);
-                                  return Padding(
-                                    padding:
-                                        const EdgeInsets.symmetric(vertical: 2),
-                                    child: Row(
-                                      children: [
-                                        SizedBox(
-                                          width: 36,
-                                          child: Text(
-                                            '${idx + 1}',
-                                            style: TextStyle(
-                                              fontSize: 14,
-                                              color: Theme.of(context)
-                                                  .colorScheme
-                                                  .primary,
-                                              fontWeight: FontWeight.bold,
-                                            ),
-                                          ),
-                                        ),
-                                        const SizedBox(width: 8),
-                                        SizedBox(
-                                          width: 52,
-                                          child: Text('${s.reps}',
-                                              style: const TextStyle(
-                                                  fontSize: 14)),
-                                        ),
-                                        const SizedBox(width: 8),
-                                        Text('$w ${s.unit}',
-                                            style: const TextStyle(
-                                                fontSize: 14)),
-                                        const Spacer(),
-                                        GestureDetector(
-                                          onTap: () => setState(
-                                              () => ex.sets.removeAt(idx)),
-                                          child: const Icon(Icons.close,
-                                              size: 16,
-                                              color: Colors.white38),
-                                        ),
-                                      ],
-                                    ),
-                                  );
-                                }),
-                              ],
-                              const SizedBox(height: 12),
-                              TextButton.icon(
-                                icon: const Icon(Icons.add, size: 18),
-                                label: const Text('Add Set'),
-                                onPressed: () => _addSet(ex),
-                                style: TextButton.styleFrom(
-                                    padding: EdgeInsets.zero),
-                              ),
-                            ],
-                          ),
-                        ),
-                      );
-                    },
+                    itemBuilder: (_, i) => _type == WorkoutType.strength
+                        ? _buildStrengthCard(_exercises[i], i)
+                        : _buildFunctionalCard(_exercises[i], i),
                   ),
           ),
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: _addExercises,
+        onPressed: _openExercisePicker,
         icon: const Icon(Icons.add),
         label: const Text('Add Exercise'),
+      ),
+    );
+  }
+
+  Widget _buildFunctionalCard(WorkoutExercise ex, int i) {
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              Expanded(
+                  child: Text(ex.liftName,
+                      style: const TextStyle(
+                          fontSize: 17, fontWeight: FontWeight.bold))),
+              IconButton(
+                icon: const Icon(Icons.close, size: 20),
+                onPressed: () => _removeExercise(i),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+              ),
+            ]),
+            const SizedBox(height: 12),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                SizedBox(
+                  width: 80,
+                  child: TextField(
+                    controller: _repsCtrl[ex.liftName],
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                        labelText: 'Reps', border: OutlineInputBorder()),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: TextField(
+                    controller: _weightCtrl[ex.liftName],
+                    keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true),
+                    decoration: const InputDecoration(
+                        labelText: 'Weight', border: OutlineInputBorder()),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                SegmentedButton<String>(
+                  segments: const [
+                    ButtonSegment(value: 'lbs', label: Text('lbs')),
+                    ButtonSegment(value: 'kg', label: Text('kg')),
+                  ],
+                  selected: {_unitSel[ex.liftName] ?? 'lbs'},
+                  onSelectionChanged: (s) =>
+                      setState(() => _unitSel[ex.liftName] = s.first),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStrengthCard(WorkoutExercise ex, int i) {
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              Expanded(
+                  child: Text(ex.liftName,
+                      style: const TextStyle(
+                          fontSize: 17, fontWeight: FontWeight.bold))),
+              IconButton(
+                icon: const Icon(Icons.close, size: 20),
+                onPressed: () => _removeExercise(i),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+              ),
+            ]),
+            if (ex.sets.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              const Row(children: [
+                SizedBox(
+                    width: 36,
+                    child: Text('Set',
+                        style:
+                            TextStyle(fontSize: 12, color: Colors.white54))),
+                SizedBox(width: 8),
+                SizedBox(
+                    width: 52,
+                    child: Text('Reps',
+                        style:
+                            TextStyle(fontSize: 12, color: Colors.white54))),
+                SizedBox(width: 8),
+                Text('Weight',
+                    style: TextStyle(fontSize: 12, color: Colors.white54)),
+              ]),
+              const SizedBox(height: 4),
+              ...ex.sets.asMap().entries.map((e) {
+                final idx = e.key;
+                final s = e.value;
+                final w = s.weight % 1 == 0
+                    ? s.weight.toInt().toString()
+                    : s.weight.toStringAsFixed(1);
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  child: Row(children: [
+                    SizedBox(
+                      width: 36,
+                      child: Text('${idx + 1}',
+                          style: TextStyle(
+                              fontSize: 14,
+                              color: Theme.of(context).colorScheme.primary,
+                              fontWeight: FontWeight.bold)),
+                    ),
+                    const SizedBox(width: 8),
+                    SizedBox(
+                        width: 52,
+                        child: Text('${s.reps}',
+                            style: const TextStyle(fontSize: 14))),
+                    const SizedBox(width: 8),
+                    Text('$w ${s.unit}',
+                        style: const TextStyle(fontSize: 14)),
+                    const Spacer(),
+                    GestureDetector(
+                      onTap: () =>
+                          setState(() => ex.sets.removeAt(idx)),
+                      child: const Icon(Icons.close,
+                          size: 16, color: Colors.white38),
+                    ),
+                  ]),
+                );
+              }),
+            ],
+            const SizedBox(height: 12),
+            TextButton.icon(
+              icon: const Icon(Icons.add, size: 18),
+              label: const Text('Add Set'),
+              onPressed: () => _addSet(ex),
+              style: TextButton.styleFrom(padding: EdgeInsets.zero),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1223,34 +1387,89 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
 // ─── Exercise Picker Dialog ───────────────────────────────────────────────────
 
 class _ExercisePickerDialog extends StatefulWidget {
-  final List<Lift> lifts;
-  final void Function(List<Lift>) onSelected;
+  final List<Lift> existingLifts;
+  final Set<String> alreadyAdded;
+  final void Function(List<String> names, List<String> newNames) onConfirm;
 
-  const _ExercisePickerDialog(
-      {required this.lifts, required this.onSelected});
+  const _ExercisePickerDialog({
+    required this.existingLifts,
+    required this.alreadyAdded,
+    required this.onConfirm,
+  });
 
   @override
   State<_ExercisePickerDialog> createState() => _ExercisePickerDialogState();
 }
 
 class _ExercisePickerDialogState extends State<_ExercisePickerDialog> {
-  final Set<int> _selected = {};
+  final _searchCtrl = TextEditingController();
+  String _query = '';
+  final Set<String> _selected = {};
+
+  List<Lift> get _filtered => widget.existingLifts
+      .where((l) =>
+          !widget.alreadyAdded.contains(l.name) &&
+          l.name.toLowerCase().contains(_query.toLowerCase()))
+      .toList();
+
+  bool get _isNew =>
+      _query.isNotEmpty &&
+      !widget.existingLifts
+          .any((l) => l.name.toLowerCase() == _query.toLowerCase()) &&
+      !widget.alreadyAdded.contains(_query);
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Select Exercises'),
+      title: const Text('Add Exercise'),
       content: SizedBox(
         width: double.maxFinite,
-        child: ListView.builder(
-          shrinkWrap: true,
-          itemCount: widget.lifts.length,
-          itemBuilder: (_, i) => CheckboxListTile(
-            title: Text(widget.lifts[i].name),
-            value: _selected.contains(i),
-            onChanged: (v) => setState(
-                () => v == true ? _selected.add(i) : _selected.remove(i)),
-          ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _searchCtrl,
+              autofocus: true,
+              textCapitalization: TextCapitalization.words,
+              decoration: const InputDecoration(
+                hintText: 'Search or type new exercise...',
+                prefixIcon: Icon(Icons.search),
+                border: OutlineInputBorder(),
+              ),
+              onChanged: (v) => setState(() => _query = v.trim()),
+            ),
+            const SizedBox(height: 8),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 280),
+              child: ListView(
+                shrinkWrap: true,
+                children: [
+                  ..._filtered.map((l) => CheckboxListTile(
+                        title: Text(l.name),
+                        value: _selected.contains(l.name),
+                        onChanged: (v) => setState(() => v == true
+                            ? _selected.add(l.name)
+                            : _selected.remove(l.name)),
+                      )),
+                  if (_isNew)
+                    CheckboxListTile(
+                      secondary: const Icon(Icons.add_circle_outline),
+                      title: Text('Create "$_query"'),
+                      value: _selected.contains(_query),
+                      onChanged: (v) => setState(() => v == true
+                          ? _selected.add(_query)
+                          : _selected.remove(_query)),
+                    ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
       actions: [
@@ -1262,8 +1481,12 @@ class _ExercisePickerDialogState extends State<_ExercisePickerDialog> {
               ? null
               : () {
                   Navigator.pop(context);
-                  widget.onSelected(
-                      _selected.map((i) => widget.lifts[i]).toList());
+                  final existingNames =
+                      widget.existingLifts.map((l) => l.name).toSet();
+                  final newNames = _selected
+                      .where((n) => !existingNames.contains(n))
+                      .toList();
+                  widget.onConfirm(_selected.toList(), newNames);
                 },
           child: const Text('Add'),
         ),
