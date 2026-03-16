@@ -1,9 +1,11 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'firebase_options.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   runApp(const LiftTrackerApp());
 }
 
@@ -60,20 +62,86 @@ class Lift {
 }
 
 class Profile {
+  String? id; // Firestore document ID
   String name;
   List<Lift> lifts;
+  List<Workout> workouts;
 
-  Profile({required this.name, List<Lift>? lifts}) : lifts = lifts ?? [];
+  Profile({this.id, required this.name, List<Lift>? lifts, List<Workout>? workouts})
+      : lifts = lifts ?? [],
+        workouts = workouts ?? [];
 
   Map<String, dynamic> toJson() => {
         'name': name,
         'lifts': lifts.map((l) => l.toJson()).toList(),
+        'workouts': workouts.map((w) => w.toJson()).toList(),
       };
 
-  factory Profile.fromJson(Map<String, dynamic> j) => Profile(
+  factory Profile.fromJson(Map<String, dynamic> j, {String? id}) => Profile(
+        id: id,
         name: j['name'] as String,
         lifts: (j['lifts'] as List<dynamic>? ?? [])
             .map((e) => Lift.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        workouts: (j['workouts'] as List<dynamic>? ?? [])
+            .map((e) => Workout.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
+}
+
+class WorkoutSet {
+  final int reps;
+  final double weight;
+  final String unit;
+
+  WorkoutSet({required this.reps, required this.weight, required this.unit});
+
+  Map<String, dynamic> toJson() =>
+      {'reps': reps, 'weight': weight, 'unit': unit};
+
+  factory WorkoutSet.fromJson(Map<String, dynamic> j) => WorkoutSet(
+        reps: j['reps'] as int,
+        weight: (j['weight'] as num).toDouble(),
+        unit: j['unit'] as String? ?? 'lbs',
+      );
+}
+
+class WorkoutExercise {
+  final String liftName;
+  final List<WorkoutSet> sets;
+
+  WorkoutExercise({required this.liftName, List<WorkoutSet>? sets})
+      : sets = sets ?? [];
+
+  Map<String, dynamic> toJson() => {
+        'liftName': liftName,
+        'sets': sets.map((s) => s.toJson()).toList(),
+      };
+
+  factory WorkoutExercise.fromJson(Map<String, dynamic> j) => WorkoutExercise(
+        liftName: j['liftName'] as String,
+        sets: (j['sets'] as List<dynamic>? ?? [])
+            .map((e) => WorkoutSet.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
+}
+
+class Workout {
+  DateTime date;
+  List<WorkoutExercise> exercises;
+
+  Workout({required this.date, List<WorkoutExercise>? exercises})
+      : exercises = exercises ?? [];
+
+  Map<String, dynamic> toJson() => {
+        'date': date.toIso8601String(),
+        'exercises': exercises.map((e) => e.toJson()).toList(),
+      };
+
+  factory Workout.fromJson(Map<String, dynamic> j) => Workout(
+        date: DateTime.parse(j['date'] as String),
+        exercises: (j['exercises'] as List<dynamic>? ?? [])
+            .map((e) => WorkoutExercise.fromJson(e as Map<String, dynamic>))
             .toList(),
       );
 }
@@ -81,21 +149,25 @@ class Profile {
 // ─── Storage ─────────────────────────────────────────────────────────────────
 
 class LiftStore {
-  static const _key = 'profiles_v1';
+  static final _col = FirebaseFirestore.instance.collection('profiles');
 
-  static Future<List<Profile>> load() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_key);
-    if (raw == null) return [];
-    final list = jsonDecode(raw) as List<dynamic>;
-    return list.map((e) => Profile.fromJson(e as Map<String, dynamic>)).toList();
+  static Stream<List<Profile>> stream() => _col.snapshots().map(
+        (snap) => snap.docs
+            .map((doc) => Profile.fromJson(doc.data(), id: doc.id))
+            .toList(),
+      );
+
+  static Future<void> saveProfile(Profile p) async {
+    if (p.id == null) {
+      final doc = await _col.add(p.toJson());
+      p.id = doc.id;
+    } else {
+      await _col.doc(p.id).set(p.toJson());
+    }
   }
 
-  static Future<void> save(List<Profile> profiles) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-        _key, jsonEncode(profiles.map((p) => p.toJson()).toList()));
-  }
+  static Future<void> deleteProfile(String id) =>
+      _col.doc(id).delete();
 }
 
 // ─── App ─────────────────────────────────────────────────────────────────────
@@ -130,21 +202,6 @@ class ProfileScreen extends StatefulWidget {
 }
 
 class _ProfileScreenState extends State<ProfileScreen> {
-  List<Profile> profiles = [];
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    final loaded = await LiftStore.load();
-    setState(() => profiles = loaded);
-  }
-
-  Future<void> _save() => LiftStore.save(profiles);
-
   void _addProfile() {
     final controller = TextEditingController();
     showDialog(
@@ -175,17 +232,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
     name = name.trim();
     if (name.isEmpty) return;
     Navigator.pop(context);
-    setState(() => profiles.add(Profile(name: name)));
-    _save();
+    LiftStore.saveProfile(Profile(name: name));
   }
 
-  void _deleteProfile(int index) {
+  void _deleteProfile(Profile profile) {
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
         title: const Text('Delete profile?'),
-        content: Text(
-            'Remove "${profiles[index].name}" and all their lifts?'),
+        content: Text('Remove "${profile.name}" and all their lifts?'),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(context),
@@ -194,8 +249,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             style: FilledButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () {
               Navigator.pop(context);
-              setState(() => profiles.removeAt(index));
-              _save();
+              LiftStore.deleteProfile(profile.id!);
             },
             child: const Text('Delete'),
           ),
@@ -220,79 +274,86 @@ class _ProfileScreenState extends State<ProfileScreen> {
             style: TextStyle(fontWeight: FontWeight.bold)),
         centerTitle: true,
       ),
-      body: profiles.isEmpty
-          ? const Center(
+      body: StreamBuilder<List<Profile>>(
+        stream: LiftStore.stream(),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          final profiles = snapshot.data ?? [];
+          if (profiles.isEmpty) {
+            return const Center(
               child: Text(
                 'No profiles yet.\nTap + to create one.',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 16, color: Colors.white54),
               ),
-            )
-          : GridView.builder(
-              padding: const EdgeInsets.all(20),
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 2,
-                mainAxisSpacing: 16,
-                crossAxisSpacing: 16,
-                childAspectRatio: 1,
-              ),
-              itemCount: profiles.length,
-              itemBuilder: (context, i) {
-                final profile = profiles[i];
-                return GestureDetector(
-                  onTap: () async {
-                    await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => HomeScreen(
-                          profile: profile,
-                          onChanged: _save,
-                        ),
-                      ),
-                    );
-                    setState(() {});
-                  },
-                  onLongPress: () => _deleteProfile(i),
-                  child: Card(
-                    margin: EdgeInsets.zero,
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        CircleAvatar(
-                          radius: 36,
-                          backgroundColor:
-                              Theme.of(context).colorScheme.primaryContainer,
-                          child: Text(
-                            _initials(profile.name),
-                            style: TextStyle(
-                              fontSize: 24,
-                              fontWeight: FontWeight.bold,
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .onPrimaryContainer,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        Text(
-                          profile.name,
-                          style: const TextStyle(
-                              fontSize: 16, fontWeight: FontWeight.w600),
-                          textAlign: TextAlign.center,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          '${profile.lifts.length} lift${profile.lifts.length == 1 ? '' : 's'}',
-                          style: const TextStyle(
-                              fontSize: 13, color: Colors.white54),
-                        ),
-                      ],
+            );
+          }
+          return GridView.builder(
+            padding: const EdgeInsets.all(20),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 2,
+              mainAxisSpacing: 16,
+              crossAxisSpacing: 16,
+              childAspectRatio: 1,
+            ),
+            itemCount: profiles.length,
+            itemBuilder: (context, i) {
+              final profile = profiles[i];
+              return GestureDetector(
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => HomeScreen(
+                      profile: profile,
+                      onChanged: () => LiftStore.saveProfile(profile),
                     ),
                   ),
-                );
-              },
-            ),
+                ),
+                onLongPress: () => _deleteProfile(profile),
+                child: Card(
+                  margin: EdgeInsets.zero,
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      CircleAvatar(
+                        radius: 36,
+                        backgroundColor:
+                            Theme.of(context).colorScheme.primaryContainer,
+                        child: Text(
+                          _initials(profile.name),
+                          style: TextStyle(
+                            fontSize: 24,
+                            fontWeight: FontWeight.bold,
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onPrimaryContainer,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        profile.name,
+                        style: const TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.w600),
+                        textAlign: TextAlign.center,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${profile.lifts.length} lift${profile.lifts.length == 1 ? '' : 's'}',
+                        style: const TextStyle(
+                            fontSize: 13, color: Colors.white54),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          );
+        },
+      ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _addProfile,
         icon: const Icon(Icons.person_add),
@@ -316,6 +377,21 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   List<Lift> get lifts => widget.profile.lifts;
+
+  void _logWorkout() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => WorkoutScreen(
+          profile: widget.profile,
+          onSaved: () {
+            setState(() {});
+            widget.onChanged();
+          },
+        ),
+      ),
+    );
+  }
 
   void _addLift() {
     final controller = TextEditingController();
@@ -456,10 +532,23 @@ class _HomeScreenState extends State<HomeScreen> {
                 );
               },
             ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _addLift,
-        icon: const Icon(Icons.add),
-        label: const Text('Add Lift'),
+      floatingActionButton: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          FloatingActionButton.extended(
+            heroTag: 'workout',
+            onPressed: _logWorkout,
+            icon: const Icon(Icons.fitness_center),
+            label: const Text('Log Workout'),
+          ),
+          const SizedBox(height: 12),
+          FloatingActionButton.extended(
+            heroTag: 'lift',
+            onPressed: _addLift,
+            icon: const Icon(Icons.add),
+            label: const Text('Add Lift'),
+          ),
+        ],
       ),
     );
   }
@@ -480,6 +569,17 @@ class LiftDetailScreen extends StatefulWidget {
 
 class _LiftDetailScreenState extends State<LiftDetailScreen> {
   static const repOptions = [1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20];
+  DateTime _selectedDate = DateTime.now();
+
+  Future<void> _pickDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedDate,
+      firstDate: DateTime(2000),
+      lastDate: DateTime.now(),
+    );
+    if (picked != null) setState(() => _selectedDate = picked);
+  }
 
   void _addOrEditRecord({RepRecord? existing, int? existingReps}) {
     int selectedReps = existingReps ?? 1;
@@ -491,6 +591,7 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
           : '',
     );
     String unit = existing?.unit ?? 'lbs';
+    if (existing != null) _selectedDate = existing.date;
 
     showModalBottomSheet(
       context: context,
@@ -583,7 +684,7 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
                       reps: selectedReps,
                       weight: w,
                       unit: unit,
-                      date: DateTime.now(),
+                      date: _selectedDate,
                     );
                   });
                   widget.onChanged();
@@ -620,6 +721,14 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
         title: Text(widget.lift.name,
             style: const TextStyle(fontWeight: FontWeight.bold)),
         centerTitle: true,
+        actions: [
+          TextButton.icon(
+            icon: const Icon(Icons.calendar_today_outlined, size: 16),
+            label: Text(_formatDate(_selectedDate)),
+            onPressed: _pickDate,
+          ),
+          const SizedBox(width: 8),
+        ],
       ),
       body: sorted.isEmpty
           ? const Center(
@@ -699,6 +808,393 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
         icon: const Icon(Icons.add),
         label: const Text('Log Record'),
       ),
+    );
+  }
+}
+
+// ─── Workout Screen ───────────────────────────────────────────────────────────
+
+class WorkoutScreen extends StatefulWidget {
+  final Profile profile;
+  final VoidCallback onSaved;
+
+  const WorkoutScreen(
+      {super.key, required this.profile, required this.onSaved});
+
+  @override
+  State<WorkoutScreen> createState() => _WorkoutScreenState();
+}
+
+class _WorkoutScreenState extends State<WorkoutScreen> {
+  DateTime _date = DateTime.now();
+  final List<WorkoutExercise> _exercises = [];
+  static const _repOptions = [1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20];
+
+  String _fmt(DateTime d) {
+    const m = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+    ];
+    return '${m[d.month - 1]} ${d.day}, ${d.year}';
+  }
+
+  Future<void> _pickDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _date,
+      firstDate: DateTime(2000),
+      lastDate: DateTime.now(),
+    );
+    if (picked != null) setState(() => _date = picked);
+  }
+
+  void _addExercises() {
+    final already = _exercises.map((e) => e.liftName).toSet();
+    final available =
+        widget.profile.lifts.where((l) => !already.contains(l.name)).toList();
+    if (available.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('All lifts already added.')),
+      );
+      return;
+    }
+    showDialog(
+      context: context,
+      builder: (_) => _ExercisePickerDialog(
+        lifts: available,
+        onSelected: (selected) => setState(() {
+          for (final l in selected) {
+            _exercises.add(WorkoutExercise(liftName: l.name));
+          }
+        }),
+      ),
+    );
+  }
+
+  void _addSet(WorkoutExercise exercise) {
+    int selectedReps = 5;
+    final weightCtrl = TextEditingController();
+    String unit = 'lbs';
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setModal) => Padding(
+          padding: EdgeInsets.fromLTRB(
+              24, 24, 24, MediaQuery.of(ctx).viewInsets.bottom + 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'Log Set — ${exercise.liftName}',
+                style:
+                    const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 24),
+              const Text('Reps',
+                  style: TextStyle(color: Colors.white60, fontSize: 13)),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: _repOptions.map((r) {
+                  final sel = r == selectedReps;
+                  return GestureDetector(
+                    onTap: () => setModal(() => selectedReps = r),
+                    child: Container(
+                      width: 52,
+                      height: 44,
+                      decoration: BoxDecoration(
+                        color: sel
+                            ? Theme.of(context).colorScheme.primary
+                            : Colors.white12,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      alignment: Alignment.center,
+                      child: Text(
+                        '$r',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          color: sel ? Colors.white : Colors.white70,
+                        ),
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
+              const SizedBox(height: 20),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: weightCtrl,
+                      autofocus: true,
+                      keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true),
+                      decoration: const InputDecoration(
+                        labelText: 'Weight',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  SegmentedButton<String>(
+                    segments: const [
+                      ButtonSegment(value: 'lbs', label: Text('lbs')),
+                      ButtonSegment(value: 'kg', label: Text('kg')),
+                    ],
+                    selected: {unit},
+                    onSelectionChanged: (s) =>
+                        setModal(() => unit = s.first),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 24),
+              FilledButton(
+                onPressed: () {
+                  final w = double.tryParse(weightCtrl.text.trim());
+                  if (w == null || w <= 0) return;
+                  Navigator.pop(ctx);
+                  setState(() => exercise.sets
+                      .add(WorkoutSet(reps: selectedReps, weight: w, unit: unit)));
+                },
+                child: const Text('Add Set', style: TextStyle(fontSize: 16)),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _save() {
+    widget.profile.workouts.add(Workout(date: _date, exercises: _exercises));
+    widget.onSaved();
+    Navigator.pop(context);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title:
+            const Text('New Workout', style: TextStyle(fontWeight: FontWeight.bold)),
+        centerTitle: true,
+        actions: [
+          TextButton(
+            onPressed: _exercises.isNotEmpty ? _save : null,
+            child: const Text('Save', style: TextStyle(fontSize: 16)),
+          ),
+          const SizedBox(width: 8),
+        ],
+      ),
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+            child: OutlinedButton.icon(
+              icon: const Icon(Icons.calendar_today_outlined, size: 18),
+              label: Text(_fmt(_date)),
+              onPressed: _pickDate,
+              style: OutlinedButton.styleFrom(alignment: Alignment.centerLeft),
+            ),
+          ),
+          Expanded(
+            child: _exercises.isEmpty
+                ? const Center(
+                    child: Text(
+                      'No exercises yet.\nTap + to add exercises.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 16, color: Colors.white54),
+                    ),
+                  )
+                : ListView.separated(
+                    padding: const EdgeInsets.all(16),
+                    itemCount: _exercises.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 12),
+                    itemBuilder: (_, i) {
+                      final ex = _exercises[i];
+                      return Card(
+                        margin: EdgeInsets.zero,
+                        child: Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      ex.liftName,
+                                      style: const TextStyle(
+                                          fontSize: 17,
+                                          fontWeight: FontWeight.bold),
+                                    ),
+                                  ),
+                                  IconButton(
+                                    icon: const Icon(Icons.close, size: 20),
+                                    onPressed: () =>
+                                        setState(() => _exercises.removeAt(i)),
+                                    padding: EdgeInsets.zero,
+                                    constraints: const BoxConstraints(),
+                                  ),
+                                ],
+                              ),
+                              if (ex.sets.isNotEmpty) ...[
+                                const SizedBox(height: 8),
+                                const Row(
+                                  children: [
+                                    SizedBox(
+                                        width: 36,
+                                        child: Text('Set',
+                                            style: TextStyle(
+                                                fontSize: 12,
+                                                color: Colors.white54))),
+                                    SizedBox(width: 8),
+                                    SizedBox(
+                                        width: 52,
+                                        child: Text('Reps',
+                                            style: TextStyle(
+                                                fontSize: 12,
+                                                color: Colors.white54))),
+                                    SizedBox(width: 8),
+                                    Text('Weight',
+                                        style: TextStyle(
+                                            fontSize: 12,
+                                            color: Colors.white54)),
+                                  ],
+                                ),
+                                const SizedBox(height: 4),
+                                ...ex.sets.asMap().entries.map((e) {
+                                  final idx = e.key;
+                                  final s = e.value;
+                                  final w = s.weight % 1 == 0
+                                      ? s.weight.toInt().toString()
+                                      : s.weight.toStringAsFixed(1);
+                                  return Padding(
+                                    padding:
+                                        const EdgeInsets.symmetric(vertical: 2),
+                                    child: Row(
+                                      children: [
+                                        SizedBox(
+                                          width: 36,
+                                          child: Text(
+                                            '${idx + 1}',
+                                            style: TextStyle(
+                                              fontSize: 14,
+                                              color: Theme.of(context)
+                                                  .colorScheme
+                                                  .primary,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        SizedBox(
+                                          width: 52,
+                                          child: Text('${s.reps}',
+                                              style: const TextStyle(
+                                                  fontSize: 14)),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Text('$w ${s.unit}',
+                                            style: const TextStyle(
+                                                fontSize: 14)),
+                                        const Spacer(),
+                                        GestureDetector(
+                                          onTap: () => setState(
+                                              () => ex.sets.removeAt(idx)),
+                                          child: const Icon(Icons.close,
+                                              size: 16,
+                                              color: Colors.white38),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                }),
+                              ],
+                              const SizedBox(height: 12),
+                              TextButton.icon(
+                                icon: const Icon(Icons.add, size: 18),
+                                label: const Text('Add Set'),
+                                onPressed: () => _addSet(ex),
+                                style: TextButton.styleFrom(
+                                    padding: EdgeInsets.zero),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _addExercises,
+        icon: const Icon(Icons.add),
+        label: const Text('Add Exercise'),
+      ),
+    );
+  }
+}
+
+// ─── Exercise Picker Dialog ───────────────────────────────────────────────────
+
+class _ExercisePickerDialog extends StatefulWidget {
+  final List<Lift> lifts;
+  final void Function(List<Lift>) onSelected;
+
+  const _ExercisePickerDialog(
+      {required this.lifts, required this.onSelected});
+
+  @override
+  State<_ExercisePickerDialog> createState() => _ExercisePickerDialogState();
+}
+
+class _ExercisePickerDialogState extends State<_ExercisePickerDialog> {
+  final Set<int> _selected = {};
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Select Exercises'),
+      content: SizedBox(
+        width: double.maxFinite,
+        child: ListView.builder(
+          shrinkWrap: true,
+          itemCount: widget.lifts.length,
+          itemBuilder: (_, i) => CheckboxListTile(
+            title: Text(widget.lifts[i].name),
+            value: _selected.contains(i),
+            onChanged: (v) => setState(
+                () => v == true ? _selected.add(i) : _selected.remove(i)),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel')),
+        FilledButton(
+          onPressed: _selected.isEmpty
+              ? null
+              : () {
+                  Navigator.pop(context);
+                  widget.onSelected(
+                      _selected.map((i) => widget.lifts[i]).toList());
+                },
+          child: const Text('Add'),
+        ),
+      ],
     );
   }
 }
