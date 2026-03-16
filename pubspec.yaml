@@ -37,6 +37,7 @@ dependencies:
   image: ^4.2.0
   shared_preferences: ^2.3.0
   fl_chart: ^0.69.0
+  crypto: ^3.0.0
 
 dev_dependencies:
   flutter_test:

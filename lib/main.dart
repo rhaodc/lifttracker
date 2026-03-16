@@ -7,6 +7,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:fl_chart/fl_chart.dart';
+import 'package:crypto/crypto.dart';
 import 'firebase_options.dart';
 
 void main() async {
@@ -14,8 +15,8 @@ void main() async {
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   final prefs = await SharedPreferences.getInstance();
   final savedId = prefs.getString('currentUserId');
-  final savedName = prefs.getString('currentUserName');
-  runApp(LiftTrackerApp(savedUserId: savedId, savedUserName: savedName));
+  final savedUsername = prefs.getString('currentUserName');
+  runApp(LiftTrackerApp(savedId: savedId, savedUsername: savedUsername));
 }
 
 // ─── Data Model ──────────────────────────────────────────────────────────────
@@ -91,6 +92,9 @@ class Lift {
 class Profile {
   String? id; // Firestore document ID
   String name;
+  String username;      // login handle
+  String? passwordHash; // SHA-256 — null means not set up
+  String? email;
   List<Lift> lifts;
   List<Workout> workouts;
   List<String> goals;
@@ -99,36 +103,49 @@ class Profile {
   Profile({
     this.id,
     required this.name,
+    String? username,
+    this.passwordHash,
+    this.email,
     List<Lift>? lifts,
     List<Workout>? workouts,
     List<String>? goals,
     this.photoData,
-  })  : lifts = lifts ?? [],
+  })  : username = username ?? name,
+        lifts = lifts ?? [],
         workouts = workouts ?? [],
         goals = goals ?? [];
 
   Map<String, dynamic> toJson() => {
         'name': name,
+        'username': username,
+        if (passwordHash != null) 'passwordHash': passwordHash,
+        if (email != null) 'email': email,
         'lifts': lifts.map((l) => l.toJson()).toList(),
         'workouts': workouts.map((w) => w.toJson()).toList(),
         'goals': goals,
         if (photoData != null) 'photoData': photoData,
       };
 
-  factory Profile.fromJson(Map<String, dynamic> j, {String? id}) => Profile(
-        id: id,
-        name: j['name'] as String,
-        lifts: (j['lifts'] as List<dynamic>? ?? [])
-            .map((e) => Lift.fromJson(e as Map<String, dynamic>))
-            .toList(),
-        workouts: (j['workouts'] as List<dynamic>? ?? [])
-            .map((e) => Workout.fromJson(e as Map<String, dynamic>))
-            .toList(),
-        goals: (j['goals'] as List<dynamic>? ?? [])
-            .map((e) => e as String)
-            .toList(),
-        photoData: j['photoData'] as String?,
-      );
+  factory Profile.fromJson(Map<String, dynamic> j, {String? id}) {
+    final name = j['name'] as String;
+    return Profile(
+      id: id,
+      name: name,
+      username: j['username'] as String? ?? name,
+      passwordHash: j['passwordHash'] as String?,
+      email: j['email'] as String?,
+      lifts: (j['lifts'] as List<dynamic>? ?? [])
+          .map((e) => Lift.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      workouts: (j['workouts'] as List<dynamic>? ?? [])
+          .map((e) => Workout.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      goals: (j['goals'] as List<dynamic>? ?? [])
+          .map((e) => e as String)
+          .toList(),
+      photoData: j['photoData'] as String?,
+    );
+  }
 }
 
 class Comment {
@@ -300,10 +317,10 @@ class LiftStore {
 // ─── App ─────────────────────────────────────────────────────────────────────
 
 class LiftTrackerApp extends StatelessWidget {
-  final String? savedUserId;
-  final String? savedUserName;
+  final String? savedId;
+  final String? savedUsername;
 
-  const LiftTrackerApp({super.key, this.savedUserId, this.savedUserName});
+  const LiftTrackerApp({super.key, this.savedId, this.savedUsername});
 
   @override
   Widget build(BuildContext context) {
@@ -317,170 +334,435 @@ class LiftTrackerApp extends StatelessWidget {
         ),
         useMaterial3: true,
       ),
-      home: (savedUserId != null && savedUserName != null)
-          ? ProfileScreen(
-              currentUserId: savedUserId!, currentUserName: savedUserName!)
-          : const WhoAreYouScreen(),
+      home: _AuthGate(savedId: savedId, savedUsername: savedUsername),
     );
   }
 }
 
-// ─── Who Are You Screen ───────────────────────────────────────────────────────
-
-class WhoAreYouScreen extends StatefulWidget {
-  const WhoAreYouScreen({super.key});
+/// Checks if a session is saved. If yes, loads the profile and jumps straight
+/// to HomeScreen. Otherwise shows SignInScreen.
+class _AuthGate extends StatefulWidget {
+  final String? savedId;
+  final String? savedUsername;
+  const _AuthGate({this.savedId, this.savedUsername});
 
   @override
-  State<WhoAreYouScreen> createState() => _WhoAreYouScreenState();
+  State<_AuthGate> createState() => _AuthGateState();
 }
 
-class _WhoAreYouScreenState extends State<WhoAreYouScreen> {
-  Future<void> _selectUser(Profile profile) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('currentUserId', profile.id!);
-    await prefs.setString('currentUserName', profile.name);
-    if (!mounted) return;
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(
-        builder: (_) => ProfileScreen(
-          currentUserId: profile.id!,
-          currentUserName: profile.name,
-        ),
-      ),
-    );
+class _AuthGateState extends State<_AuthGate> {
+  late Future<Profile?> _profileFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _profileFuture = _load();
   }
 
-  void _addProfile() {
-    final ctrl = TextEditingController();
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Create Profile'),
-        content: TextField(
-          controller: ctrl,
-          autofocus: true,
-          textCapitalization: TextCapitalization.words,
-          decoration: const InputDecoration(hintText: 'e.g. Robert'),
-          onSubmitted: (_) => _confirmAdd(ctrl.text),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel')),
-          FilledButton(
-            onPressed: () => _confirmAdd(ctrl.text),
-            child: const Text('Create'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _confirmAdd(String name) async {
-    name = name.trim();
-    if (name.isEmpty) return;
-    Navigator.pop(context);
-    final profile = Profile(name: name);
-    await LiftStore.saveProfile(profile);
-    await _selectUser(profile);
-  }
-
-  String _initials(String name) {
-    final parts = name.trim().split(' ');
-    if (parts.length >= 2) return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
-    return name.substring(0, name.length >= 2 ? 2 : 1).toUpperCase();
+  Future<Profile?> _load() async {
+    if (widget.savedId == null) return null;
+    final doc = await FirebaseFirestore.instance
+        .collection('profiles')
+        .doc(widget.savedId)
+        .get();
+    if (!doc.exists) return null;
+    return Profile.fromJson(doc.data()!, id: doc.id);
   }
 
   @override
   Widget build(BuildContext context) {
+    return FutureBuilder<Profile?>(
+      future: _profileFuture,
+      builder: (context, snap) {
+        if (snap.connectionState != ConnectionState.done) {
+          return const Scaffold(
+              body: Center(child: CircularProgressIndicator()));
+        }
+        final profile = snap.data;
+        if (profile == null) {
+          return SignInScreen(prefilledUsername: widget.savedUsername);
+        }
+        return HomeScreen(
+          profile: profile,
+          currentUserId: profile.id!,
+          currentUserName: profile.username,
+          onChanged: () => LiftStore.saveProfile(profile),
+        );
+      },
+    );
+  }
+}
+
+// ─── Auth Helpers ────────────────────────────────────────────────────────────
+
+String _hashPassword(String password) =>
+    sha256.convert(utf8.encode(password)).toString();
+
+void _navigateToHome(BuildContext context, Profile profile) async {
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.setString('currentUserId', profile.id!);
+  await prefs.setString('currentUserName', profile.username);
+  if (!context.mounted) return;
+  Navigator.of(context).pushReplacement(
+    MaterialPageRoute(
+      builder: (_) => HomeScreen(
+        profile: profile,
+        currentUserId: profile.id!,
+        currentUserName: profile.username,
+        onChanged: () => LiftStore.saveProfile(profile),
+      ),
+    ),
+  );
+}
+
+// ─── Sign In Screen ───────────────────────────────────────────────────────────
+
+class SignInScreen extends StatefulWidget {
+  final String? prefilledUsername;
+  const SignInScreen({super.key, this.prefilledUsername});
+
+  @override
+  State<SignInScreen> createState() => _SignInScreenState();
+}
+
+class _SignInScreenState extends State<SignInScreen> {
+  late final TextEditingController _userCtrl;
+  final _pwCtrl = TextEditingController();
+  bool _obscure = true;
+  bool _loading = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _userCtrl = TextEditingController(text: widget.prefilledUsername ?? '');
+  }
+
+  @override
+  void dispose() {
+    _userCtrl.dispose();
+    _pwCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _signIn() async {
+    final username = _userCtrl.text.trim();
+    final password = _pwCtrl.text;
+    if (username.isEmpty || password.isEmpty) {
+      setState(() => _error = 'Please enter your username and password.');
+      return;
+    }
+    setState(() { _loading = true; _error = null; });
+    final snap = await FirebaseFirestore.instance
+        .collection('profiles')
+        .where('username', isEqualTo: username)
+        .limit(1)
+        .get();
+    if (snap.docs.isEmpty) {
+      setState(() { _error = 'No account found with that username.'; _loading = false; });
+      return;
+    }
+    final profile = Profile.fromJson(snap.docs.first.data(), id: snap.docs.first.id);
+    if (profile.passwordHash == null ||
+        profile.passwordHash != _hashPassword(password)) {
+      setState(() { _error = 'Incorrect password.'; _loading = false; });
+      _pwCtrl.clear();
+      return;
+    }
+    if (!mounted) return;
+    _navigateToHome(context, profile);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Scaffold(
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 36),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.fitness_center, size: 64, color: cs.primary),
+                const SizedBox(height: 16),
+                const Text('Lift Tracker',
+                    style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                const Text('Sign in to continue',
+                    style: TextStyle(fontSize: 14, color: Colors.white54)),
+                const SizedBox(height: 40),
+                TextField(
+                  controller: _userCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Username',
+                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.person_outline),
+                  ),
+                  onChanged: (_) => setState(() => _error = null),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: _pwCtrl,
+                  obscureText: _obscure,
+                  autofocus: widget.prefilledUsername != null,
+                  decoration: InputDecoration(
+                    labelText: 'Password',
+                    border: const OutlineInputBorder(),
+                    prefixIcon: const Icon(Icons.lock_outline),
+                    suffixIcon: IconButton(
+                      icon: Icon(_obscure
+                          ? Icons.visibility_off
+                          : Icons.visibility),
+                      onPressed: () => setState(() => _obscure = !_obscure),
+                    ),
+                  ),
+                  onSubmitted: (_) => _signIn(),
+                  onChanged: (_) => setState(() => _error = null),
+                ),
+                if (_error != null) ...[
+                  const SizedBox(height: 12),
+                  Text(_error!,
+                      style: const TextStyle(color: Colors.redAccent)),
+                ],
+                const SizedBox(height: 24),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton(
+                    onPressed: _loading ? null : _signIn,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      child: _loading
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: Colors.white))
+                          : const Text('Sign In',
+                              style: TextStyle(fontSize: 16)),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    const Expanded(child: Divider()),
+                    const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 12),
+                      child: Text('or',
+                          style: TextStyle(color: Colors.white38)),
+                    ),
+                    const Expanded(child: Divider()),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => const CreateProfileScreen()),
+                    ),
+                    icon: const Icon(Icons.person_add_outlined),
+                    label: const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 14),
+                      child: Text('Create New Profile',
+                          style: TextStyle(fontSize: 16)),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Create Profile Screen ────────────────────────────────────────────────────
+
+class CreateProfileScreen extends StatefulWidget {
+  const CreateProfileScreen({super.key});
+
+  @override
+  State<CreateProfileScreen> createState() => _CreateProfileScreenState();
+}
+
+class _CreateProfileScreenState extends State<CreateProfileScreen> {
+  final _userCtrl = TextEditingController();
+  final _emailCtrl = TextEditingController();
+  final _pwCtrl = TextEditingController();
+  final _confirmCtrl = TextEditingController();
+  bool _obscure1 = true;
+  bool _obscure2 = true;
+  bool _loading = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _userCtrl.dispose();
+    _emailCtrl.dispose();
+    _pwCtrl.dispose();
+    _confirmCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _create() async {
+    final username = _userCtrl.text.trim();
+    final email = _emailCtrl.text.trim();
+    final pw = _pwCtrl.text;
+    final confirm = _confirmCtrl.text;
+
+    if (username.isEmpty) {
+      setState(() => _error = 'Username is required.');
+      return;
+    }
+    if (email.isEmpty || !email.contains('@')) {
+      setState(() => _error = 'Enter a valid email address.');
+      return;
+    }
+    if (pw.length < 4) {
+      setState(() => _error = 'Password must be at least 4 characters.');
+      return;
+    }
+    if (pw != confirm) {
+      setState(() => _error = 'Passwords do not match.');
+      return;
+    }
+
+    setState(() { _loading = true; _error = null; });
+
+    // Check username uniqueness
+    final existing = await FirebaseFirestore.instance
+        .collection('profiles')
+        .where('username', isEqualTo: username)
+        .limit(1)
+        .get();
+    if (existing.docs.isNotEmpty) {
+      setState(() {
+        _error = 'That username is already taken.';
+        _loading = false;
+      });
+      return;
+    }
+
+    final profile = Profile(
+      name: username,
+      username: username,
+      passwordHash: _hashPassword(pw),
+      email: email,
+    );
+    await LiftStore.saveProfile(profile);
+    if (!mounted) return;
+    _navigateToHome(context, profile);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Who are you?',
+        title: const Text('Create Profile',
             style: TextStyle(fontWeight: FontWeight.bold)),
         centerTitle: true,
       ),
-      body: StreamBuilder<List<Profile>>(
-        stream: LiftStore.stream(),
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          final profiles = snapshot.data ?? [];
-          if (profiles.isEmpty) {
-            return Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Text(
-                    'No profiles yet.\nCreate one to get started.',
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 36, vertical: 24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Icon(Icons.person_add, size: 56, color: cs.primary),
+                const SizedBox(height: 12),
+                const Text('Set up your account',
                     textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 16, color: Colors.white54),
+                    style: TextStyle(fontSize: 16, color: Colors.white54)),
+                const SizedBox(height: 32),
+                TextField(
+                  controller: _userCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Username',
+                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.person_outline),
+                    helperText: 'This is how others will see you',
                   ),
-                  const SizedBox(height: 24),
-                  FilledButton.icon(
-                    onPressed: _addProfile,
-                    icon: const Icon(Icons.person_add),
-                    label: const Text('Create Profile'),
+                  onChanged: (_) => setState(() => _error = null),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: _emailCtrl,
+                  keyboardType: TextInputType.emailAddress,
+                  decoration: const InputDecoration(
+                    labelText: 'Email',
+                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.email_outlined),
                   ),
+                  onChanged: (_) => setState(() => _error = null),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: _pwCtrl,
+                  obscureText: _obscure1,
+                  decoration: InputDecoration(
+                    labelText: 'Password',
+                    border: const OutlineInputBorder(),
+                    prefixIcon: const Icon(Icons.lock_outline),
+                    suffixIcon: IconButton(
+                      icon: Icon(_obscure1
+                          ? Icons.visibility_off
+                          : Icons.visibility),
+                      onPressed: () =>
+                          setState(() => _obscure1 = !_obscure1),
+                    ),
+                  ),
+                  onChanged: (_) => setState(() => _error = null),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: _confirmCtrl,
+                  obscureText: _obscure2,
+                  decoration: InputDecoration(
+                    labelText: 'Confirm Password',
+                    border: const OutlineInputBorder(),
+                    prefixIcon: const Icon(Icons.lock_outline),
+                    suffixIcon: IconButton(
+                      icon: Icon(_obscure2
+                          ? Icons.visibility_off
+                          : Icons.visibility),
+                      onPressed: () =>
+                          setState(() => _obscure2 = !_obscure2),
+                    ),
+                  ),
+                  onSubmitted: (_) => _create(),
+                  onChanged: (_) => setState(() => _error = null),
+                ),
+                if (_error != null) ...[
+                  const SizedBox(height: 12),
+                  Text(_error!,
+                      style: const TextStyle(color: Colors.redAccent)),
                 ],
-              ),
-            );
-          }
-          return GridView.builder(
-            padding: const EdgeInsets.all(20),
-            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-              maxCrossAxisExtent: 200,
-              mainAxisSpacing: 16,
-              crossAxisSpacing: 16,
-              childAspectRatio: 1,
-            ),
-            itemCount: profiles.length,
-            itemBuilder: (context, i) {
-              final profile = profiles[i];
-              return GestureDetector(
-                onTap: () => _selectUser(profile),
-                child: Card(
-                  margin: EdgeInsets.zero,
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      CircleAvatar(
-                        radius: 36,
-                        backgroundColor:
-                            Theme.of(context).colorScheme.primaryContainer,
-                        backgroundImage: profile.photoData != null
-                            ? NetworkImage(profile.photoData!)
-                            : null,
-                        child: profile.photoData == null
-                            ? Text(_initials(profile.name),
-                                style: TextStyle(
-                                  fontSize: 24,
-                                  fontWeight: FontWeight.bold,
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .onPrimaryContainer,
-                                ))
-                            : null,
-                      ),
-                      const SizedBox(height: 12),
-                      Text(profile.name,
-                          style: const TextStyle(
-                              fontSize: 16, fontWeight: FontWeight.w600),
-                          textAlign: TextAlign.center,
-                          overflow: TextOverflow.ellipsis),
-                    ],
+                const SizedBox(height: 24),
+                FilledButton(
+                  onPressed: _loading ? null : _create,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    child: _loading
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Colors.white))
+                        : const Text('Create Profile',
+                            style: TextStyle(fontSize: 16)),
                   ),
                 ),
-              );
-            },
-          );
-        },
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _addProfile,
-        icon: const Icon(Icons.person_add),
-        label: const Text('Create Profile'),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -585,7 +867,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               await prefs.remove('currentUserName');
               nav.pushReplacement(
                 MaterialPageRoute(
-                    builder: (_) => const WhoAreYouScreen()),
+                    builder: (_) => const SignInScreen()),
               );
             },
           ),
