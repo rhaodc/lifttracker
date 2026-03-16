@@ -375,8 +375,29 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen>
+    with SingleTickerProviderStateMixin {
+  late final TabController _tabController;
   List<Lift> get lifts => widget.profile.lifts;
+  List<Workout> get workouts => widget.profile.workouts;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 2, vsync: this);
+    _tabController.addListener(() => setState(() {}));
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
+
+  String _fmtDate(DateTime d) {
+    const m = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return '${m[d.month - 1]} ${d.day}, ${d.year}';
+  }
 
   void _logWorkout() {
     Navigator.push(
@@ -470,86 +491,138 @@ class _HomeScreenState extends State<HomeScreen> {
         title: Text(widget.profile.name,
             style: const TextStyle(fontWeight: FontWeight.bold)),
         centerTitle: true,
+        bottom: TabBar(
+          controller: _tabController,
+          tabs: const [
+            Tab(text: 'Personal Lifts'),
+            Tab(text: 'Workouts'),
+          ],
+        ),
       ),
-      body: lifts.isEmpty
-          ? const Center(
-              child: Text(
-                'No lifts yet.\nTap + to add your first lift.',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 16, color: Colors.white54),
-              ),
+      body: TabBarView(
+        controller: _tabController,
+        children: [_buildLiftsTab(), _buildWorkoutsTab()],
+      ),
+      floatingActionButton: _tabController.index == 0
+          ? FloatingActionButton.extended(
+              onPressed: _addLift,
+              icon: const Icon(Icons.add),
+              label: const Text('Add Lift'),
             )
-          : ListView.separated(
-              padding: const EdgeInsets.all(16),
-              itemCount: lifts.length,
-              separatorBuilder: (_, _) => const SizedBox(height: 8),
-              itemBuilder: (context, i) {
-                final lift = lifts[i];
-                return Dismissible(
-                  key: ValueKey('lift-$i'),
-                  direction: DismissDirection.endToStart,
-                  background: Container(
-                    alignment: Alignment.centerRight,
-                    padding: const EdgeInsets.only(right: 20),
-                    decoration: BoxDecoration(
-                      color: Colors.red.shade800,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: const Icon(Icons.delete_outline, color: Colors.white),
-                  ),
-                  confirmDismiss: (_) async {
-                    _deleteLift(i);
-                    return false;
-                  },
-                  child: Card(
-                    margin: EdgeInsets.zero,
-                    child: ListTile(
-                      contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 8),
-                      title: Text(lift.name,
-                          style: const TextStyle(
-                              fontSize: 18, fontWeight: FontWeight.w600)),
-                      subtitle: Text(_subtitle(lift),
-                          style: const TextStyle(
-                              fontSize: 13, color: Colors.white60)),
-                      trailing: const Icon(Icons.chevron_right),
-                      onTap: () async {
-                        await Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => LiftDetailScreen(
-                              lift: lift,
-                              onChanged: () {
-                                setState(() {});
-                                widget.onChanged();
-                              },
-                            ),
-                          ),
-                        );
+          : FloatingActionButton.extended(
+              onPressed: _logWorkout,
+              icon: const Icon(Icons.fitness_center),
+              label: const Text('Log Workout'),
+            ),
+    );
+  }
+
+  Widget _buildLiftsTab() {
+    if (lifts.isEmpty) {
+      return const Center(
+        child: Text(
+          'No lifts yet.\nTap + to add your first lift.',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 16, color: Colors.white54),
+        ),
+      );
+    }
+    return ListView.separated(
+      padding: const EdgeInsets.all(16),
+      itemCount: lifts.length,
+      separatorBuilder: (_, _) => const SizedBox(height: 8),
+      itemBuilder: (context, i) {
+        final lift = lifts[i];
+        return Dismissible(
+          key: ValueKey('lift-$i'),
+          direction: DismissDirection.endToStart,
+          background: Container(
+            alignment: Alignment.centerRight,
+            padding: const EdgeInsets.only(right: 20),
+            decoration: BoxDecoration(
+              color: Colors.red.shade800,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(Icons.delete_outline, color: Colors.white),
+          ),
+          confirmDismiss: (_) async {
+            _deleteLift(i);
+            return false;
+          },
+          child: Card(
+            margin: EdgeInsets.zero,
+            child: ListTile(
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              title: Text(lift.name,
+                  style: const TextStyle(
+                      fontSize: 18, fontWeight: FontWeight.w600)),
+              subtitle: Text(_subtitle(lift),
+                  style:
+                      const TextStyle(fontSize: 13, color: Colors.white60)),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () async {
+                await Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => LiftDetailScreen(
+                      lift: lift,
+                      onChanged: () {
+                        setState(() {});
+                        widget.onChanged();
                       },
                     ),
                   ),
                 );
               },
             ),
-      floatingActionButton: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          FloatingActionButton.extended(
-            heroTag: 'workout',
-            onPressed: _logWorkout,
-            icon: const Icon(Icons.fitness_center),
-            label: const Text('Log Workout'),
           ),
-          const SizedBox(height: 12),
-          FloatingActionButton.extended(
-            heroTag: 'lift',
-            onPressed: _addLift,
-            icon: const Icon(Icons.add),
-            label: const Text('Add Lift'),
+        );
+      },
+    );
+  }
+
+  Widget _buildWorkoutsTab() {
+    if (workouts.isEmpty) {
+      return const Center(
+        child: Text(
+          'No workouts yet.\nTap + to log one.',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 16, color: Colors.white54),
+        ),
+      );
+    }
+    final sorted = [...workouts]
+      ..sort((a, b) => b.date.compareTo(a.date));
+    return ListView.separated(
+      padding: const EdgeInsets.all(16),
+      itemCount: sorted.length,
+      separatorBuilder: (_, _) => const SizedBox(height: 8),
+      itemBuilder: (_, i) {
+        final workout = sorted[i];
+        final exerciseNames = workout.exercises.map((e) => e.liftName).join(' · ');
+        final totalSets =
+            workout.exercises.fold(0, (acc, e) => acc + e.sets.length);
+        return Card(
+          margin: EdgeInsets.zero,
+          child: ListTile(
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            title: Text(_fmtDate(workout.date),
+                style: const TextStyle(
+                    fontSize: 16, fontWeight: FontWeight.w600)),
+            subtitle: Text(
+              exerciseNames.isEmpty ? 'No exercises' : exerciseNames,
+              style: const TextStyle(fontSize: 13, color: Colors.white60),
+              overflow: TextOverflow.ellipsis,
+            ),
+            trailing: Text(
+              '$totalSets set${totalSets == 1 ? '' : 's'}',
+              style: const TextStyle(fontSize: 13, color: Colors.white54),
+            ),
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 }
