@@ -123,6 +123,8 @@ class WorkoutExercise {
   int reps;             // functional
   double? weight;       // functional (optional)
   String unit;
+  String? otherType;    // 'Reps' | 'Weight' | 'Height' | 'RPE'
+  String? otherValue;
 
   WorkoutExercise({
     required this.liftName,
@@ -130,6 +132,8 @@ class WorkoutExercise {
     this.reps = 10,
     this.weight,
     this.unit = 'lbs',
+    this.otherType,
+    this.otherValue,
   }) : sets = sets ?? [];
 
   Map<String, dynamic> toJson() => {
@@ -138,6 +142,8 @@ class WorkoutExercise {
         'reps': reps,
         if (weight != null) 'weight': weight,
         'unit': unit,
+        if (otherType != null) 'otherType': otherType,
+        if (otherValue != null && otherValue!.isNotEmpty) 'otherValue': otherValue,
       };
 
   factory WorkoutExercise.fromJson(Map<String, dynamic> j) => WorkoutExercise(
@@ -148,6 +154,8 @@ class WorkoutExercise {
         reps: j['reps'] as int? ?? 10,
         weight: (j['weight'] as num?)?.toDouble(),
         unit: j['unit'] as String? ?? 'lbs',
+        otherType: j['otherType'] as String?,
+        otherValue: j['otherValue'] as String?,
       );
 }
 
@@ -968,7 +976,10 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
   final Map<String, TextEditingController> _repsCtrl = {};
   final Map<String, TextEditingController> _weightCtrl = {};
   final Map<String, String> _unitSel = {};
+  final Map<String, FixedExtentScrollController> _otherScrollCtrl = {};
+  final Map<String, TextEditingController> _otherValueCtrl = {};
   static const _repOptions = [1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20];
+  static const _otherOptions = ['Reps', 'Weight', 'Height', 'RPE'];
 
   @override
   void dispose() {
@@ -976,6 +987,8 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
     _resultCtrl.dispose();
     for (final c in _repsCtrl.values) { c.dispose(); }
     for (final c in _weightCtrl.values) { c.dispose(); }
+    for (final c in _otherScrollCtrl.values) { c.dispose(); }
+    for (final c in _otherValueCtrl.values) { c.dispose(); }
     super.dispose();
   }
 
@@ -1004,6 +1017,8 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
       _repsCtrl[name] = TextEditingController(text: '10');
       _weightCtrl[name] = TextEditingController();
       _unitSel[name] = 'lbs';
+      _otherScrollCtrl[name] = FixedExtentScrollController();
+      _otherValueCtrl[name] = TextEditingController();
     });
   }
 
@@ -1014,6 +1029,8 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
       _repsCtrl.remove(name)?.dispose();
       _weightCtrl.remove(name)?.dispose();
       _unitSel.remove(name);
+      _otherScrollCtrl.remove(name)?.dispose();
+      _otherValueCtrl.remove(name)?.dispose();
     });
   }
 
@@ -1140,6 +1157,10 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
         ex.weight =
             double.tryParse(_weightCtrl[ex.liftName]?.text.trim() ?? '');
         ex.unit = _unitSel[ex.liftName] ?? 'lbs';
+        final otherIdx = _otherScrollCtrl[ex.liftName]?.selectedItem ?? 0;
+        final otherVal = _otherValueCtrl[ex.liftName]?.text.trim() ?? '';
+        ex.otherType = _otherOptions[otherIdx];
+        ex.otherValue = otherVal.isEmpty ? null : otherVal;
       }
     }
     widget.profile.workouts.add(Workout(
@@ -1323,6 +1344,77 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
                   selected: {_unitSel[ex.liftName] ?? 'lbs'},
                   onSelectionChanged: (s) =>
                       setState(() => _unitSel[ex.liftName] = s.first),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            const Text('Other',
+                style: TextStyle(color: Colors.white60, fontSize: 13)),
+            const SizedBox(height: 8),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                // Scroll wheel
+                Container(
+                  height: 100,
+                  width: 100,
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Colors.white24),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      ListWheelScrollView(
+                        controller: _otherScrollCtrl[ex.liftName],
+                        itemExtent: 32,
+                        physics: const FixedExtentScrollPhysics(),
+                        onSelectedItemChanged: (_) => setState(() {}),
+                        children: _otherOptions
+                            .map((o) => Center(
+                                  child: Text(o,
+                                      style:
+                                          const TextStyle(fontSize: 14)),
+                                ))
+                            .toList(),
+                      ),
+                      // Selection highlight
+                      IgnorePointer(
+                        child: Container(
+                          height: 32,
+                          decoration: BoxDecoration(
+                            border: Border(
+                              top: BorderSide(
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .primary,
+                                  width: 1.5),
+                              bottom: BorderSide(
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .primary,
+                                  width: 1.5),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: TextField(
+                    controller: _otherValueCtrl[ex.liftName],
+                    keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true),
+                    decoration: InputDecoration(
+                      labelText: _otherOptions[
+                          _otherScrollCtrl[ex.liftName]
+                                  ?.selectedItem ??
+                              0],
+                      border: const OutlineInputBorder(),
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -1703,6 +1795,12 @@ class _WorkoutDetailScreenState extends State<WorkoutDetailScreen> {
                   ),
                 ],
               ]),
+              if (ex.otherType != null && ex.otherValue != null) ...[
+                const SizedBox(height: 4),
+                Text('${ex.otherType}: ${ex.otherValue}',
+                    style: const TextStyle(
+                        fontSize: 13, color: Colors.white60)),
+              ],
             ],
           ],
         ),
