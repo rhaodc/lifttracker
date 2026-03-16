@@ -1,15 +1,21 @@
 import 'dart:convert';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:image/image.dart' as img;
 import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:fl_chart/fl_chart.dart';
 import 'firebase_options.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-  runApp(const LiftTrackerApp());
+  final prefs = await SharedPreferences.getInstance();
+  final savedId = prefs.getString('currentUserId');
+  final savedName = prefs.getString('currentUserName');
+  runApp(LiftTrackerApp(savedUserId: savedId, savedUserName: savedName));
 }
 
 // ─── Data Model ──────────────────────────────────────────────────────────────
@@ -45,12 +51,23 @@ class RepRecord {
 class Lift {
   String name;
   Map<int, RepRecord> bests;
+  List<Comment> comments;
+  Map<String, List<String>> reactions;
 
-  Lift({required this.name, Map<int, RepRecord>? bests}) : bests = bests ?? {};
+  Lift({
+    required this.name,
+    Map<int, RepRecord>? bests,
+    List<Comment>? comments,
+    Map<String, List<String>>? reactions,
+  })  : bests = bests ?? {},
+        comments = comments ?? [],
+        reactions = reactions ?? {};
 
   Map<String, dynamic> toJson() => {
         'name': name,
         'bests': bests.map((k, v) => MapEntry(k.toString(), v.toJson())),
+        'comments': comments.map((c) => c.toJson()).toList(),
+        'reactions': reactions.map((k, v) => MapEntry(k, v)),
       };
 
   factory Lift.fromJson(Map<String, dynamic> j) => Lift(
@@ -60,6 +77,13 @@ class Lift {
             int.parse(k),
             RepRecord.fromJson(v as Map<String, dynamic>),
           ),
+        ),
+        comments: (j['comments'] as List<dynamic>? ?? [])
+            .map((e) => Comment.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        reactions: (j['reactions'] as Map<String, dynamic>? ?? {}).map(
+          (k, v) => MapEntry(
+              k, (v as List<dynamic>).map((e) => e as String).toList()),
         ),
       );
 }
@@ -104,6 +128,26 @@ class Profile {
             .map((e) => e as String)
             .toList(),
         photoData: j['photoData'] as String?,
+      );
+}
+
+class Comment {
+  final String author;
+  final String text;
+  final DateTime date;
+
+  Comment({required this.author, required this.text, required this.date});
+
+  Map<String, dynamic> toJson() => {
+        'author': author,
+        'text': text,
+        'date': date.toIso8601String(),
+      };
+
+  factory Comment.fromJson(Map<String, dynamic> j) => Comment(
+        author: j['author'] as String,
+        text: j['text'] as String,
+        date: DateTime.parse(j['date'] as String),
       );
 }
 
@@ -183,6 +227,8 @@ class Workout {
   int? timeCap; // minutes
   String? result;
   List<WorkoutExercise> exercises;
+  List<Comment> comments;
+  Map<String, List<String>> reactions;
 
   Workout({
     required this.date,
@@ -190,7 +236,11 @@ class Workout {
     this.timeCap,
     this.result,
     List<WorkoutExercise>? exercises,
-  }) : exercises = exercises ?? [];
+    List<Comment>? comments,
+    Map<String, List<String>>? reactions,
+  })  : exercises = exercises ?? [],
+        comments = comments ?? [],
+        reactions = reactions ?? {};
 
   Map<String, dynamic> toJson() => {
         'date': date.toIso8601String(),
@@ -198,6 +248,8 @@ class Workout {
         if (timeCap != null) 'timeCap': timeCap,
         if (result != null && result!.isNotEmpty) 'result': result,
         'exercises': exercises.map((e) => e.toJson()).toList(),
+        'comments': comments.map((c) => c.toJson()).toList(),
+        'reactions': reactions.map((k, v) => MapEntry(k, v)),
       };
 
   factory Workout.fromJson(Map<String, dynamic> j) => Workout(
@@ -211,6 +263,13 @@ class Workout {
         exercises: (j['exercises'] as List<dynamic>? ?? [])
             .map((e) => WorkoutExercise.fromJson(e as Map<String, dynamic>))
             .toList(),
+        comments: (j['comments'] as List<dynamic>? ?? [])
+            .map((e) => Comment.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        reactions: (j['reactions'] as Map<String, dynamic>? ?? {}).map(
+          (k, v) => MapEntry(
+              k, (v as List<dynamic>).map((e) => e as String).toList()),
+        ),
       );
 }
 
@@ -241,7 +300,10 @@ class LiftStore {
 // ─── App ─────────────────────────────────────────────────────────────────────
 
 class LiftTrackerApp extends StatelessWidget {
-  const LiftTrackerApp({super.key});
+  final String? savedUserId;
+  final String? savedUserName;
+
+  const LiftTrackerApp({super.key, this.savedUserId, this.savedUserName});
 
   @override
   Widget build(BuildContext context) {
@@ -255,7 +317,171 @@ class LiftTrackerApp extends StatelessWidget {
         ),
         useMaterial3: true,
       ),
-      home: const ProfileScreen(),
+      home: (savedUserId != null && savedUserName != null)
+          ? ProfileScreen(
+              currentUserId: savedUserId!, currentUserName: savedUserName!)
+          : const WhoAreYouScreen(),
+    );
+  }
+}
+
+// ─── Who Are You Screen ───────────────────────────────────────────────────────
+
+class WhoAreYouScreen extends StatefulWidget {
+  const WhoAreYouScreen({super.key});
+
+  @override
+  State<WhoAreYouScreen> createState() => _WhoAreYouScreenState();
+}
+
+class _WhoAreYouScreenState extends State<WhoAreYouScreen> {
+  Future<void> _selectUser(Profile profile) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('currentUserId', profile.id!);
+    await prefs.setString('currentUserName', profile.name);
+    if (!mounted) return;
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ProfileScreen(
+          currentUserId: profile.id!,
+          currentUserName: profile.name,
+        ),
+      ),
+    );
+  }
+
+  void _addProfile() {
+    final ctrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Create Profile'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          textCapitalization: TextCapitalization.words,
+          decoration: const InputDecoration(hintText: 'e.g. Robert'),
+          onSubmitted: (_) => _confirmAdd(ctrl.text),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () => _confirmAdd(ctrl.text),
+            child: const Text('Create'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _confirmAdd(String name) async {
+    name = name.trim();
+    if (name.isEmpty) return;
+    Navigator.pop(context);
+    final profile = Profile(name: name);
+    await LiftStore.saveProfile(profile);
+    await _selectUser(profile);
+  }
+
+  String _initials(String name) {
+    final parts = name.trim().split(' ');
+    if (parts.length >= 2) return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
+    return name.substring(0, name.length >= 2 ? 2 : 1).toUpperCase();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Who are you?',
+            style: TextStyle(fontWeight: FontWeight.bold)),
+        centerTitle: true,
+      ),
+      body: StreamBuilder<List<Profile>>(
+        stream: LiftStore.stream(),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          final profiles = snapshot.data ?? [];
+          if (profiles.isEmpty) {
+            return Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text(
+                    'No profiles yet.\nCreate one to get started.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 16, color: Colors.white54),
+                  ),
+                  const SizedBox(height: 24),
+                  FilledButton.icon(
+                    onPressed: _addProfile,
+                    icon: const Icon(Icons.person_add),
+                    label: const Text('Create Profile'),
+                  ),
+                ],
+              ),
+            );
+          }
+          return GridView.builder(
+            padding: const EdgeInsets.all(20),
+            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+              maxCrossAxisExtent: 200,
+              mainAxisSpacing: 16,
+              crossAxisSpacing: 16,
+              childAspectRatio: 1,
+            ),
+            itemCount: profiles.length,
+            itemBuilder: (context, i) {
+              final profile = profiles[i];
+              return GestureDetector(
+                onTap: () => _selectUser(profile),
+                child: Card(
+                  margin: EdgeInsets.zero,
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      CircleAvatar(
+                        radius: 36,
+                        backgroundColor:
+                            Theme.of(context).colorScheme.primaryContainer,
+                        backgroundImage: profile.photoData != null
+                            ? NetworkImage(profile.photoData!)
+                            : null,
+                        child: profile.photoData == null
+                            ? Text(_initials(profile.name),
+                                style: TextStyle(
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.bold,
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onPrimaryContainer,
+                                ))
+                            : null,
+                      ),
+                      const SizedBox(height: 12),
+                      Text(profile.name,
+                          style: const TextStyle(
+                              fontSize: 16, fontWeight: FontWeight.w600),
+                          textAlign: TextAlign.center,
+                          overflow: TextOverflow.ellipsis),
+                    ],
+                  ),
+                ),
+              );
+            },
+          );
+        },
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _addProfile,
+        icon: const Icon(Icons.person_add),
+        label: const Text('Create Profile'),
+      ),
     );
   }
 }
@@ -263,7 +489,13 @@ class LiftTrackerApp extends StatelessWidget {
 // ─── Profile Screen ───────────────────────────────────────────────────────────
 
 class ProfileScreen extends StatefulWidget {
-  const ProfileScreen({super.key});
+  final String currentUserId;
+  final String currentUserName;
+
+  const ProfileScreen(
+      {super.key,
+      required this.currentUserId,
+      required this.currentUserName});
 
   @override
   State<ProfileScreen> createState() => _ProfileScreenState();
@@ -341,6 +573,24 @@ class _ProfileScreenState extends State<ProfileScreen> {
         title: const Text('Lift Tracker',
             style: TextStyle(fontWeight: FontWeight.bold)),
         centerTitle: true,
+        actions: [
+          TextButton.icon(
+            icon: const Icon(Icons.swap_horiz, size: 18),
+            label: Text(widget.currentUserName,
+                style: const TextStyle(fontSize: 13)),
+            onPressed: () async {
+              final nav = Navigator.of(context);
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.remove('currentUserId');
+              await prefs.remove('currentUserName');
+              nav.pushReplacement(
+                MaterialPageRoute(
+                    builder: (_) => const WhoAreYouScreen()),
+              );
+            },
+          ),
+          const SizedBox(width: 8),
+        ],
       ),
       body: StreamBuilder<List<Profile>>(
         stream: LiftStore.stream(),
@@ -375,6 +625,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   MaterialPageRoute(
                     builder: (_) => HomeScreen(
                       profile: profile,
+                      currentUserId: widget.currentUserId,
+                      currentUserName: widget.currentUserName,
                       onChanged: () => LiftStore.saveProfile(profile),
                     ),
                   ),
@@ -440,9 +692,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
 class HomeScreen extends StatefulWidget {
   final Profile profile;
+  final String currentUserId;
+  final String currentUserName;
   final VoidCallback onChanged;
 
-  const HomeScreen({super.key, required this.profile, required this.onChanged});
+  const HomeScreen({
+    super.key,
+    required this.profile,
+    required this.currentUserId,
+    required this.currentUserName,
+    required this.onChanged,
+  });
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -563,8 +823,35 @@ class _HomeScreenState extends State<HomeScreen>
     }).join('  ·  ');
   }
 
+  Widget _reactionSummary(Map<String, List<String>> reactions) {
+    final active = reactions.entries.where((e) => e.value.isNotEmpty).toList();
+    if (active.isEmpty) return const SizedBox.shrink();
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: active
+          .map((e) => Padding(
+                padding: const EdgeInsets.only(right: 2),
+                child: Text(
+                  e.value.length > 1 ? '${e.key}${e.value.length}' : e.key,
+                  style: const TextStyle(fontSize: 13),
+                ),
+              ))
+          .toList(),
+    );
+  }
+
+  Widget _sectionHeader(String title, IconData icon) {
+    return Row(children: [
+      Icon(icon, size: 16, color: Theme.of(context).colorScheme.primary),
+      const SizedBox(width: 6),
+      Text(title,
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+    ]);
+  }
+
   @override
   Widget build(BuildContext context) {
+    final isOwn = widget.profile.id == widget.currentUserId;
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.profile.name,
@@ -583,13 +870,13 @@ class _HomeScreenState extends State<HomeScreen>
         controller: _tabController,
         children: [_buildDashboardTab(), _buildLiftsTab(), _buildWorkoutsTab()],
       ),
-      floatingActionButton: _tabController.index == 1
+      floatingActionButton: isOwn && _tabController.index == 1
           ? FloatingActionButton.extended(
               onPressed: _addLift,
               icon: const Icon(Icons.add),
               label: const Text('Add Lift'),
             )
-          : _tabController.index == 2
+          : isOwn && _tabController.index == 2
               ? FloatingActionButton.extended(
                   onPressed: _logWorkout,
                   icon: const Icon(Icons.fitness_center),
@@ -683,7 +970,194 @@ class _HomeScreenState extends State<HomeScreen>
     widget.onChanged();
   }
 
+  Widget _buildOtherProfileDashboard() {
+    final photoData = widget.profile.photoData;
+
+    final liftsWithDate = widget.profile.lifts.map((l) {
+      DateTime? latest;
+      for (final r in l.bests.values) {
+        if (latest == null || r.date.isAfter(latest)) latest = r.date;
+      }
+      return (lift: l, date: latest);
+    }).toList()
+      ..sort((a, b) {
+        if (a.date == null && b.date == null) return 0;
+        if (a.date == null) return 1;
+        if (b.date == null) return -1;
+        return b.date!.compareTo(a.date!);
+      });
+
+    final sortedWorkouts = [...widget.profile.workouts]
+      ..sort((a, b) => b.date.compareTo(a.date));
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(20, 32, 20, 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Center(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                CircleAvatar(
+                  radius: 28,
+                  backgroundColor:
+                      Theme.of(context).colorScheme.primaryContainer,
+                  backgroundImage:
+                      photoData != null ? NetworkImage(photoData) : null,
+                  child: photoData == null
+                      ? Text(
+                          _initials(widget.profile.name),
+                          style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onPrimaryContainer),
+                        )
+                      : null,
+                ),
+                const SizedBox(width: 14),
+                Text(widget.profile.name,
+                    style: const TextStyle(
+                        fontSize: 28, fontWeight: FontWeight.bold)),
+              ],
+            ),
+          ),
+          const SizedBox(height: 28),
+          _sectionHeader('Recent Lifts', Icons.fitness_center),
+          const SizedBox(height: 8),
+          if (liftsWithDate.isEmpty)
+            const Padding(
+              padding: EdgeInsets.only(bottom: 16),
+              child: Text('No lifts logged yet.',
+                  style: TextStyle(color: Colors.white54)),
+            )
+          else
+            ...liftsWithDate.take(5).map((item) {
+              final lift = item.lift;
+              return Card(
+                margin: const EdgeInsets.only(bottom: 8),
+                child: ListTile(
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                  title: Row(children: [
+                    Expanded(
+                        child: Text(lift.name,
+                            style: const TextStyle(
+                                fontWeight: FontWeight.w600, fontSize: 15))),
+                    _reactionSummary(lift.reactions),
+                  ]),
+                  subtitle: Text(_subtitle(lift),
+                      style: const TextStyle(
+                          fontSize: 12, color: Colors.white60)),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () async {
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => LiftDetailScreen(
+                          lift: lift,
+                          currentUserName: widget.currentUserName,
+                          isOwnProfile: false,
+                          onChanged: () {
+                            setState(() {});
+                            widget.onChanged();
+                          },
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              );
+            }),
+          const SizedBox(height: 8),
+          _sectionHeader('Recent Workouts', Icons.calendar_today_outlined),
+          const SizedBox(height: 8),
+          if (sortedWorkouts.isEmpty)
+            const Padding(
+              padding: EdgeInsets.only(bottom: 16),
+              child: Text('No workouts logged yet.',
+                  style: TextStyle(color: Colors.white54)),
+            )
+          else
+            ...sortedWorkouts.take(5).map((workout) {
+              final exerciseNames =
+                  workout.exercises.map((e) => e.liftName).join(' · ');
+              return Card(
+                margin: const EdgeInsets.only(bottom: 8),
+                child: ListTile(
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                  title: Row(children: [
+                    Text(_fmtDate(workout.date),
+                        style: const TextStyle(
+                            fontWeight: FontWeight.w600, fontSize: 15)),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.primaryContainer,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(workout.type.label,
+                          style: TextStyle(
+                              fontSize: 10,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onPrimaryContainer)),
+                    ),
+                    const Spacer(),
+                    _reactionSummary(workout.reactions),
+                  ]),
+                  subtitle: Text(
+                      exerciseNames.isEmpty ? 'No exercises' : exerciseNames,
+                      style: const TextStyle(
+                          fontSize: 12, color: Colors.white60),
+                      overflow: TextOverflow.ellipsis),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => WorkoutDetailScreen(
+                        workout: workout,
+                        profile: widget.profile,
+                        currentUserName: widget.currentUserName,
+                        isOwnProfile: false,
+                        onChanged: widget.onChanged,
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            }),
+          const SizedBox(height: 8),
+          _sectionHeader('Goals', Icons.flag_outlined),
+          const SizedBox(height: 8),
+          if (widget.profile.goals.isEmpty)
+            const Text('No goals set.',
+                style: TextStyle(color: Colors.white54))
+          else
+            ...widget.profile.goals.map((goal) => Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Row(children: [
+                    const Text('• ', style: TextStyle(color: Colors.white70)),
+                    Expanded(
+                        child: Text(goal,
+                            style: const TextStyle(
+                                fontSize: 14, color: Colors.white70))),
+                  ]),
+                )),
+        ],
+      ),
+    );
+  }
+
   Widget _buildDashboardTab() {
+    final isOwn = widget.profile.id == widget.currentUserId;
+    if (!isOwn) return _buildOtherProfileDashboard();
+
     final hour = DateTime.now().hour;
     final greeting = hour < 12
         ? 'Good morning'
@@ -781,7 +1255,9 @@ class _HomeScreenState extends State<HomeScreen>
                 fontStyle: FontStyle.italic),
             textAlign: TextAlign.center,
           ),
-          const SizedBox(height: 28),
+          const SizedBox(height: 20),
+          const _WeightCalculatorCard(),
+          const SizedBox(height: 20),
           // Equal-height cards
           IntrinsicHeight(
             child: Row(
@@ -918,6 +1394,7 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Widget _buildLiftsTab() {
+    final isOwn = widget.profile.id == widget.currentUserId;
     if (lifts.isEmpty) {
       return const Center(
         child: Text(
@@ -933,6 +1410,44 @@ class _HomeScreenState extends State<HomeScreen>
       separatorBuilder: (_, _) => const SizedBox(height: 8),
       itemBuilder: (context, i) {
         final lift = lifts[i];
+        final card = Card(
+          margin: EdgeInsets.zero,
+          child: ListTile(
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            title: Text(lift.name,
+                style: const TextStyle(
+                    fontSize: 18, fontWeight: FontWeight.w600)),
+            subtitle: Text(_subtitle(lift),
+                style:
+                    const TextStyle(fontSize: 13, color: Colors.white60)),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _reactionSummary(lift.reactions),
+                const SizedBox(width: 4),
+                const Icon(Icons.chevron_right),
+              ],
+            ),
+            onTap: () async {
+              await Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => LiftDetailScreen(
+                    lift: lift,
+                    currentUserName: widget.currentUserName,
+                    isOwnProfile: isOwn,
+                    onChanged: () {
+                      setState(() {});
+                      widget.onChanged();
+                    },
+                  ),
+                ),
+              );
+            },
+          ),
+        );
+        if (!isOwn) return card;
         return Dismissible(
           key: ValueKey('lift-$i'),
           direction: DismissDirection.endToStart,
@@ -949,40 +1464,14 @@ class _HomeScreenState extends State<HomeScreen>
             _deleteLift(i);
             return false;
           },
-          child: Card(
-            margin: EdgeInsets.zero,
-            child: ListTile(
-              contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              title: Text(lift.name,
-                  style: const TextStyle(
-                      fontSize: 18, fontWeight: FontWeight.w600)),
-              subtitle: Text(_subtitle(lift),
-                  style:
-                      const TextStyle(fontSize: 13, color: Colors.white60)),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () async {
-                await Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => LiftDetailScreen(
-                      lift: lift,
-                      onChanged: () {
-                        setState(() {});
-                        widget.onChanged();
-                      },
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
+          child: card,
         );
       },
     );
   }
 
   Widget _buildWorkoutsTab() {
+    final isOwn = widget.profile.id == widget.currentUserId;
     if (workouts.isEmpty) {
       return const Center(
         child: Text(
@@ -1000,7 +1489,8 @@ class _HomeScreenState extends State<HomeScreen>
       separatorBuilder: (_, _) => const SizedBox(height: 8),
       itemBuilder: (_, i) {
         final workout = sorted[i];
-        final exerciseNames = workout.exercises.map((e) => e.liftName).join(' · ');
+        final exerciseNames =
+            workout.exercises.map((e) => e.liftName).join(' · ');
         return Card(
           margin: EdgeInsets.zero,
           child: ListTile(
@@ -1012,7 +1502,8 @@ class _HomeScreenState extends State<HomeScreen>
                       fontSize: 16, fontWeight: FontWeight.w600)),
               const SizedBox(width: 8),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                 decoration: BoxDecoration(
                   color: Theme.of(context).colorScheme.primaryContainer,
                   borderRadius: BorderRadius.circular(8),
@@ -1020,7 +1511,9 @@ class _HomeScreenState extends State<HomeScreen>
                 child: Text(workout.type.label,
                     style: TextStyle(
                         fontSize: 11,
-                        color: Theme.of(context).colorScheme.onPrimaryContainer)),
+                        color: Theme.of(context)
+                            .colorScheme
+                            .onPrimaryContainer)),
               ),
             ]),
             subtitle: Text(
@@ -1028,13 +1521,22 @@ class _HomeScreenState extends State<HomeScreen>
               style: const TextStyle(fontSize: 13, color: Colors.white60),
               overflow: TextOverflow.ellipsis,
             ),
-            trailing: const Icon(Icons.chevron_right),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _reactionSummary(workout.reactions),
+                const SizedBox(width: 4),
+                const Icon(Icons.chevron_right),
+              ],
+            ),
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(
                 builder: (_) => WorkoutDetailScreen(
                   workout: workout,
                   profile: widget.profile,
+                  currentUserName: widget.currentUserName,
+                  isOwnProfile: isOwn,
                   onChanged: widget.onChanged,
                 ),
               ),
@@ -1050,10 +1552,17 @@ class _HomeScreenState extends State<HomeScreen>
 
 class LiftDetailScreen extends StatefulWidget {
   final Lift lift;
+  final String currentUserName;
+  final bool isOwnProfile;
   final VoidCallback onChanged;
 
-  const LiftDetailScreen(
-      {super.key, required this.lift, required this.onChanged});
+  const LiftDetailScreen({
+    super.key,
+    required this.lift,
+    required this.currentUserName,
+    required this.isOwnProfile,
+    required this.onChanged,
+  });
 
   @override
   State<LiftDetailScreen> createState() => _LiftDetailScreenState();
@@ -1062,6 +1571,32 @@ class LiftDetailScreen extends StatefulWidget {
 class _LiftDetailScreenState extends State<LiftDetailScreen> {
   static const repOptions = [1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20];
   DateTime _selectedDate = DateTime.now();
+  final _commentCtrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _commentCtrl.dispose();
+    super.dispose();
+  }
+
+  void _addComment() {
+    final text = _commentCtrl.text.trim();
+    if (text.isEmpty) return;
+    setState(() {
+      widget.lift.comments.add(Comment(
+        author: widget.currentUserName,
+        text: text,
+        date: DateTime.now(),
+      ));
+      _commentCtrl.clear();
+    });
+    widget.onChanged();
+  }
+
+  void _deleteComment(int index) {
+    setState(() => widget.lift.comments.removeAt(index));
+    widget.onChanged();
+  }
 
   Future<void> _pickDate() async {
     final picked = await showDatePicker(
@@ -1210,6 +1745,186 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
     widget.onChanged();
   }
 
+  Widget _buildOneRMCard() {
+    final oneRM = widget.lift.bests[1];
+    if (oneRM == null) return const SizedBox.shrink();
+    final w = oneRM.weight % 1 == 0
+        ? oneRM.weight.toInt().toString()
+        : oneRM.weight.toStringAsFixed(1);
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      color: Theme.of(context).colorScheme.primaryContainer,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+        child: Row(
+          children: [
+            const Icon(Icons.emoji_events, size: 32, color: Colors.amber),
+            const SizedBox(width: 12),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Most Recent 1RM',
+                    style: TextStyle(fontSize: 13, color: Colors.white70)),
+                Text('$w ${oneRM.unit}',
+                    style: const TextStyle(
+                        fontSize: 28, fontWeight: FontWeight.bold)),
+              ],
+            ),
+            const Spacer(),
+            Text(_formatDate(oneRM.date),
+                style: const TextStyle(fontSize: 12, color: Colors.white60)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildChart() {
+    if (widget.lift.bests.isEmpty) return const SizedBox.shrink();
+
+    // Build spots from all records sorted by date
+    final records = widget.lift.bests.values.toList()
+      ..sort((a, b) => a.date.compareTo(b.date));
+
+    final spots = records.map((r) {
+      final daysSinceEpoch = r.date.millisecondsSinceEpoch / 86400000.0;
+      return FlSpot(daysSinceEpoch, r.weight);
+    }).toList();
+
+    final minY = records.map((r) => r.weight).reduce(min);
+    final maxY = records.map((r) => r.weight).reduce(max);
+    final yPadding = max((maxY - minY) * 0.15, 10.0);
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(8, 16, 16, 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Padding(
+              padding: EdgeInsets.only(left: 12, bottom: 12),
+              child: Text('Weight Progress',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600,
+                      color: Colors.white70)),
+            ),
+            SizedBox(
+              height: 200,
+              child: LineChart(
+                LineChartData(
+                  minY: minY - yPadding,
+                  maxY: maxY + yPadding,
+                  gridData: FlGridData(
+                    show: true,
+                    drawVerticalLine: false,
+                    getDrawingHorizontalLine: (_) => FlLine(
+                      color: Colors.white12,
+                      strokeWidth: 1,
+                    ),
+                  ),
+                  borderData: FlBorderData(show: false),
+                  titlesData: FlTitlesData(
+                    leftTitles: AxisTitles(
+                      sideTitles: SideTitles(
+                        showTitles: true,
+                        reservedSize: 44,
+                        getTitlesWidget: (value, meta) => Text(
+                          value.toInt().toString(),
+                          style: const TextStyle(
+                              fontSize: 11, color: Colors.white54),
+                        ),
+                      ),
+                    ),
+                    bottomTitles: AxisTitles(
+                      sideTitles: SideTitles(
+                        showTitles: true,
+                        reservedSize: 28,
+                        interval: spots.length > 1
+                            ? (spots.last.x - spots.first.x) /
+                                (spots.length > 4 ? 3 : spots.length - 1)
+                            : 1,
+                        getTitlesWidget: (value, meta) {
+                          final date = DateTime.fromMillisecondsSinceEpoch(
+                              (value * 86400000).toInt());
+                          const months = [
+                            'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                            'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+                          ];
+                          return Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Text(
+                              '${months[date.month - 1]} ${date.day}',
+                              style: const TextStyle(
+                                  fontSize: 10, color: Colors.white54),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                    rightTitles: const AxisTitles(
+                        sideTitles: SideTitles(showTitles: false)),
+                    topTitles: const AxisTitles(
+                        sideTitles: SideTitles(showTitles: false)),
+                  ),
+                  lineBarsData: [
+                    LineChartBarData(
+                      spots: spots,
+                      isCurved: true,
+                      curveSmoothness: 0.3,
+                      color: Theme.of(context).colorScheme.primary,
+                      barWidth: 2.5,
+                      dotData: FlDotData(
+                        show: true,
+                        getDotPainter: (spot, percent, bar, index) =>
+                            FlDotCirclePainter(
+                          radius: 4,
+                          color: Theme.of(context).colorScheme.primary,
+                          strokeWidth: 2,
+                          strokeColor: Colors.white,
+                        ),
+                      ),
+                      belowBarData: BarAreaData(
+                        show: true,
+                        color: Theme.of(context)
+                            .colorScheme
+                            .primary
+                            .withValues(alpha: 0.15),
+                      ),
+                    ),
+                  ],
+                  lineTouchData: LineTouchData(
+                    touchTooltipData: LineTouchTooltipData(
+                      getTooltipItems: (touchedSpots) =>
+                          touchedSpots.map((s) {
+                        final date = DateTime.fromMillisecondsSinceEpoch(
+                            (s.x * 86400000).toInt());
+                        final rec = records.firstWhere(
+                            (r) => r.date.day == date.day &&
+                                r.date.month == date.month &&
+                                r.date.year == date.year,
+                            orElse: () => records[s.spotIndex]);
+                        final w = rec.weight % 1 == 0
+                            ? rec.weight.toInt().toString()
+                            : rec.weight.toStringAsFixed(1);
+                        return LineTooltipItem(
+                          '$w ${rec.unit}\n${rec.reps}RM\n${_formatDate(date)}',
+                          const TextStyle(
+                              fontSize: 12,
+                              color: Colors.white,
+                              fontWeight: FontWeight.w500),
+                        );
+                      }).toList(),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   String _formatDate(DateTime d) {
     const months = [
       'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
@@ -1237,84 +1952,106 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
           const SizedBox(width: 8),
         ],
       ),
-      body: sorted.isEmpty
-          ? const Center(
-              child: Text(
-                'No records yet.\nTap + to log a lift.',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 16, color: Colors.white54),
-              ),
-            )
-          : ListView.separated(
-              padding: const EdgeInsets.all(16),
-              itemCount: sorted.length,
-              separatorBuilder: (_, _) => const SizedBox(height: 8),
-              itemBuilder: (_, i) {
-                final entry = sorted[i];
-                final reps = entry.key;
-                final rec = entry.value;
-                final w = rec.weight % 1 == 0
-                    ? rec.weight.toInt().toString()
-                    : rec.weight.toStringAsFixed(1);
-                return Card(
-                  margin: EdgeInsets.zero,
-                  child: ListTile(
-                    contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 20, vertical: 10),
-                    leading: Container(
-                      width: 52,
-                      height: 52,
-                      decoration: BoxDecoration(
-                        color:
-                            Theme.of(context).colorScheme.primaryContainer,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      alignment: Alignment.center,
-                      child: Text(
-                        '${reps}RM',
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 15,
-                          color: Theme.of(context)
-                              .colorScheme
-                              .onPrimaryContainer,
+      body: Column(
+        children: [
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+              children: [
+                _buildOneRMCard(),
+                _buildChart(),
+                if (sorted.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 32),
+                    child: Text(
+                      'No records yet.\nTap + to log a lift.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 16, color: Colors.white54),
+                    ),
+                  )
+                else
+                  ...sorted.map((entry) {
+                    final reps = entry.key;
+                    final rec = entry.value;
+                    final w = rec.weight % 1 == 0
+                        ? rec.weight.toInt().toString()
+                        : rec.weight.toStringAsFixed(1);
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Card(
+                        margin: EdgeInsets.zero,
+                        child: ListTile(
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 20, vertical: 10),
+                          leading: Container(
+                            width: 52,
+                            height: 52,
+                            decoration: BoxDecoration(
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .primaryContainer,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            alignment: Alignment.center,
+                            child: Text(
+                              '${reps}RM',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 15,
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onPrimaryContainer,
+                              ),
+                            ),
+                          ),
+                          title: Text('$w ${rec.unit}',
+                              style: const TextStyle(
+                                  fontSize: 22, fontWeight: FontWeight.bold)),
+                          subtitle: Text(_formatDate(rec.date),
+                              style: const TextStyle(
+                                  fontSize: 12, color: Colors.white54)),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                icon: const Icon(Icons.edit_outlined),
+                                onPressed: () => _addOrEditRecord(
+                                    existing: rec, existingReps: reps),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.delete_outline,
+                                    color: Colors.redAccent),
+                                onPressed: () => _deleteRecord(reps),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
-                    ),
-                    title: Text(
-                      '$w ${rec.unit}',
-                      style: const TextStyle(
-                          fontSize: 22, fontWeight: FontWeight.bold),
-                    ),
-                    subtitle: Text(
-                      _formatDate(rec.date),
-                      style: const TextStyle(
-                          fontSize: 12, color: Colors.white54),
-                    ),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        IconButton(
-                          icon: const Icon(Icons.edit_outlined),
-                          onPressed: () => _addOrEditRecord(
-                              existing: rec, existingReps: reps),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.delete_outline,
-                              color: Colors.redAccent),
-                          onPressed: () => _deleteRecord(reps),
-                        ),
-                      ],
-                    ),
-                  ),
-                );
-              },
+                    );
+                  }),
+                _SocialSection(
+                  currentUserName: widget.currentUserName,
+                  reactions: widget.lift.reactions,
+                  comments: widget.lift.comments,
+                  onChanged: widget.onChanged,
+                  onDeleteComment: _deleteComment,
+                ),
+              ],
             ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _addOrEditRecord(),
-        icon: const Icon(Icons.add),
-        label: const Text('Log Record'),
+          ),
+          _CommentInputBar(
+            controller: _commentCtrl,
+            onSubmit: _addComment,
+          ),
+        ],
       ),
+      floatingActionButton: widget.isOwnProfile
+          ? FloatingActionButton.extended(
+              onPressed: () => _addOrEditRecord(),
+              icon: const Icon(Icons.add),
+              label: const Text('Log Record'),
+            )
+          : null,
     );
   }
 }
@@ -2009,12 +2746,16 @@ class _ExercisePickerDialogState extends State<_ExercisePickerDialog> {
 class WorkoutDetailScreen extends StatefulWidget {
   final Workout workout;
   final Profile profile;
+  final String currentUserName;
+  final bool isOwnProfile;
   final VoidCallback onChanged;
 
   const WorkoutDetailScreen({
     super.key,
     required this.workout,
     required this.profile,
+    required this.currentUserName,
+    required this.isOwnProfile,
     required this.onChanged,
   });
 
@@ -2023,9 +2764,36 @@ class WorkoutDetailScreen extends StatefulWidget {
 }
 
 class _WorkoutDetailScreenState extends State<WorkoutDetailScreen> {
+  final _commentCtrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _commentCtrl.dispose();
+    super.dispose();
+  }
+
   String _fmt(DateTime d) {
     const m = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
     return '${m[d.month - 1]} ${d.day}, ${d.year}';
+  }
+
+  void _addComment() {
+    final text = _commentCtrl.text.trim();
+    if (text.isEmpty) return;
+    setState(() {
+      widget.workout.comments.add(Comment(
+        author: widget.currentUserName,
+        text: text,
+        date: DateTime.now(),
+      ));
+      _commentCtrl.clear();
+    });
+    widget.onChanged();
+  }
+
+  void _deleteComment(int index) {
+    setState(() => widget.workout.comments.removeAt(index));
+    widget.onChanged();
   }
 
   void _deleteWorkout() {
@@ -2066,41 +2834,59 @@ class _WorkoutDetailScreenState extends State<WorkoutDetailScreen> {
             style: const TextStyle(fontWeight: FontWeight.bold)),
         centerTitle: true,
         actions: [
-          IconButton(
-            icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
-            onPressed: _deleteWorkout,
-          ),
+          if (widget.isOwnProfile)
+            IconButton(
+              icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+              onPressed: _deleteWorkout,
+            ),
         ],
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
+      body: Column(
         children: [
-          Wrap(
-            spacing: 8,
-            children: [
-              Chip(label: Text(widget.workout.type.label)),
-              if (widget.workout.timeCap != null)
-                Chip(label: Text('${widget.workout.timeCap} min')),
-            ],
-          ),
-          if (widget.workout.result != null && widget.workout.result!.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            Card(
-              child: ListTile(
-                leading: const Icon(Icons.emoji_events_outlined, color: Colors.amber),
-                title: Text(widget.workout.result!,
-                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                subtitle: Text(switch (widget.workout.type) {
-                  WorkoutType.amrap => 'Rounds Completed',
-                  WorkoutType.emom => 'Completed',
-                  WorkoutType.forTime => 'Completion Time',
-                  _ => 'Result',
-                }),
-              ),
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+              children: [
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    Chip(label: Text(widget.workout.type.label)),
+                    if (widget.workout.timeCap != null)
+                      Chip(label: Text('${widget.workout.timeCap} min')),
+                  ],
+                ),
+                if (widget.workout.result != null && widget.workout.result!.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  Card(
+                    child: ListTile(
+                      leading: const Icon(Icons.emoji_events_outlined, color: Colors.amber),
+                      title: Text(widget.workout.result!,
+                          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                      subtitle: Text(switch (widget.workout.type) {
+                        WorkoutType.amrap => 'Rounds Completed',
+                        WorkoutType.emom => 'Completed',
+                        WorkoutType.forTime => 'Completion Time',
+                        _ => 'Result',
+                      }),
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 16),
+                ...widget.workout.exercises.map((ex) => _buildExerciseCard(ex)),
+                _SocialSection(
+                  currentUserName: widget.profile.name,
+                  reactions: widget.workout.reactions,
+                  comments: widget.workout.comments,
+                  onChanged: widget.onChanged,
+                  onDeleteComment: _deleteComment,
+                ),
+              ],
             ),
-          ],
-          const SizedBox(height: 16),
-          ...widget.workout.exercises.map((ex) => _buildExerciseCard(ex)),
+          ),
+          _CommentInputBar(
+            controller: _commentCtrl,
+            onSubmit: _addComment,
+          ),
         ],
       ),
     );
@@ -2120,12 +2906,14 @@ class _WorkoutDetailScreenState extends State<WorkoutDetailScreen> {
                     style: const TextStyle(
                         fontSize: 17, fontWeight: FontWeight.bold)),
               ),
-              IconButton(
-                icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 20),
-                onPressed: () => _deleteExercise(ex),
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
-              ),
+              if (widget.isOwnProfile)
+                IconButton(
+                  icon: const Icon(Icons.delete_outline,
+                      color: Colors.redAccent, size: 20),
+                  onPressed: () => _deleteExercise(ex),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                ),
             ]),
             const SizedBox(height: 8),
             if (widget.workout.type == WorkoutType.strength) ...[
@@ -2182,6 +2970,396 @@ class _WorkoutDetailScreenState extends State<WorkoutDetailScreen> {
                         fontSize: 13, color: Colors.white60)),
               ],
             ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Social Section ───────────────────────────────────────────────────────────
+
+class _SocialSection extends StatefulWidget {
+  final String currentUserName;
+  final Map<String, List<String>> reactions;
+  final List<Comment> comments;
+  final VoidCallback onChanged;
+  final void Function(int) onDeleteComment;
+
+  const _SocialSection({
+    required this.currentUserName,
+    required this.reactions,
+    required this.comments,
+    required this.onChanged,
+    required this.onDeleteComment,
+  });
+
+  @override
+  State<_SocialSection> createState() => _SocialSectionState();
+}
+
+class _SocialSectionState extends State<_SocialSection> {
+  static const _emojis = ['💪', '🔥', '👏', '🏆', '😤'];
+
+  void _toggle(String emoji) {
+    setState(() {
+      final list = widget.reactions.putIfAbsent(emoji, () => []);
+      if (list.contains(widget.currentUserName)) {
+        list.remove(widget.currentUserName);
+        if (list.isEmpty) widget.reactions.remove(emoji);
+      } else {
+        list.add(widget.currentUserName);
+      }
+    });
+    widget.onChanged();
+  }
+
+  String _timeAgo(DateTime d) {
+    final diff = DateTime.now().difference(d);
+    if (diff.inMinutes < 1) return 'just now';
+    if (diff.inHours < 1) return '${diff.inMinutes}m ago';
+    if (diff.inDays < 1) return '${diff.inHours}h ago';
+    if (diff.inDays < 7) return '${diff.inDays}d ago';
+    const m = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return '${m[d.month - 1]} ${d.day}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 8, bottom: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Divider(height: 32),
+          // Reactions
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: _emojis.map((emoji) {
+              final list = widget.reactions[emoji] ?? [];
+              final reacted = list.contains(widget.currentUserName);
+              return GestureDetector(
+                onTap: () => _toggle(emoji),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 150),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: reacted
+                        ? Theme.of(context).colorScheme.primaryContainer
+                        : Colors.white10,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: reacted
+                          ? Theme.of(context).colorScheme.primary
+                          : Colors.transparent,
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(emoji, style: const TextStyle(fontSize: 20)),
+                      if (list.isNotEmpty) ...[
+                        const SizedBox(width: 4),
+                        Text(
+                          '${list.length}',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: reacted
+                                ? Theme.of(context).colorScheme.onPrimaryContainer
+                                : Colors.white60,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
+          const SizedBox(height: 20),
+          // Comments header
+          Text(
+            'Comments (${widget.comments.length})',
+            style: const TextStyle(
+                fontSize: 13, color: Colors.white54, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 12),
+          if (widget.comments.isEmpty)
+            const Text('No comments yet.',
+                style: TextStyle(fontSize: 13, color: Colors.white38))
+          else
+            ...widget.comments.asMap().entries.map((e) {
+              final comment = e.value;
+              final isOwn = comment.author == widget.currentUserName;
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 14),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    CircleAvatar(
+                      radius: 14,
+                      backgroundColor:
+                          Theme.of(context).colorScheme.primaryContainer,
+                      child: Text(
+                        comment.author[0].toUpperCase(),
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: Theme.of(context).colorScheme.onPrimaryContainer,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(children: [
+                            Text(comment.author,
+                                style: const TextStyle(
+                                    fontSize: 13, fontWeight: FontWeight.w600)),
+                            const SizedBox(width: 8),
+                            Text(_timeAgo(comment.date),
+                                style: const TextStyle(
+                                    fontSize: 11, color: Colors.white38)),
+                          ]),
+                          const SizedBox(height: 3),
+                          Text(comment.text,
+                              style: const TextStyle(
+                                  fontSize: 14, color: Colors.white)),
+                        ],
+                      ),
+                    ),
+                    if (isOwn)
+                      GestureDetector(
+                        onTap: () => widget.onDeleteComment(e.key),
+                        child: const Icon(Icons.close,
+                            size: 14, color: Colors.white38),
+                      ),
+                  ],
+                ),
+              );
+            }),
+          const SizedBox(height: 72), // breathing room above input bar
+        ],
+      ),
+    );
+  }
+}
+
+class _CommentInputBar extends StatelessWidget {
+  final TextEditingController controller;
+  final VoidCallback onSubmit;
+
+  const _CommentInputBar({required this.controller, required this.onSubmit});
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      top: false,
+      child: Container(
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surface,
+          border: Border(
+              top: BorderSide(color: Colors.white12)),
+        ),
+        padding: EdgeInsets.fromLTRB(
+            12, 8, 12, MediaQuery.of(context).viewInsets.bottom + 8),
+        child: Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: controller,
+                textInputAction: TextInputAction.send,
+                onSubmitted: (_) => onSubmit(),
+                decoration: const InputDecoration(
+                  hintText: 'Add a comment…',
+                  border: OutlineInputBorder(),
+                  contentPadding:
+                      EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  isDense: true,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            IconButton(
+              icon: Icon(Icons.send_rounded,
+                  color: Theme.of(context).colorScheme.primary),
+              onPressed: onSubmit,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Weight Calculator Card ───────────────────────────────────────────────────
+
+class _WeightCalculatorCard extends StatefulWidget {
+  const _WeightCalculatorCard();
+
+  @override
+  State<_WeightCalculatorCard> createState() => _WeightCalculatorCardState();
+}
+
+class _WeightCalculatorCardState extends State<_WeightCalculatorCard> {
+  final _baseCtrl = TextEditingController();
+  final _customCtrl = TextEditingController();
+
+  // Descending: 110 → 40, 3 rows × 5 cols
+  static const _pcts = [
+    110, 105, 100, 95, 90,
+    85,  80,  75,  70, 65,
+    60,  55,  50,  45, 40,
+  ];
+
+  @override
+  void dispose() {
+    _baseCtrl.dispose();
+    _customCtrl.dispose();
+    super.dispose();
+  }
+
+  String _calc(double? base, int pct) {
+    if (base == null) return '—';
+    final v = base * pct / 100;
+    return v % 1 == 0 ? v.toInt().toString() : v.toStringAsFixed(1);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final base = double.tryParse(_baseCtrl.text.trim());
+    final customPct = double.tryParse(_customCtrl.text.trim());
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              Icon(Icons.calculate_outlined,
+                  size: 16, color: Theme.of(context).colorScheme.primary),
+              const SizedBox(width: 6),
+              const Text('Weight Calculator',
+                  style: TextStyle(fontSize: 12, color: Colors.white54)),
+            ]),
+            const SizedBox(height: 12),
+            // Base weight input
+            TextField(
+              controller: _baseCtrl,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                labelText: 'Base weight',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+              onChanged: (_) => setState(() {}),
+            ),
+            const SizedBox(height: 10),
+            // Custom % row
+            Row(children: [
+              Expanded(
+                child: TextField(
+                  controller: _customCtrl,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  decoration: const InputDecoration(
+                    labelText: 'Custom %',
+                    suffixText: '%',
+                    border: OutlineInputBorder(),
+                    isDense: true,
+                  ),
+                  onChanged: (_) => setState(() {}),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color:
+                        Theme.of(context).colorScheme.primaryContainer,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    (base != null && customPct != null)
+                        ? (base * customPct / 100).toStringAsFixed(1)
+                        : '—',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: Theme.of(context)
+                          .colorScheme
+                          .onPrimaryContainer,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ),
+            ]),
+            const SizedBox(height: 14),
+            const Divider(height: 1),
+            const SizedBox(height: 10),
+            // 3 × 5 grid
+            ...List.generate(3, (row) {
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Row(
+                  children: List.generate(5, (col) {
+                    final pct = _pcts[row * 5 + col];
+                    final active = pct == 100;
+                    return Expanded(
+                      child: Container(
+                        margin: const EdgeInsets.symmetric(horizontal: 2),
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        decoration: BoxDecoration(
+                          color: active
+                              ? Theme.of(context)
+                                  .colorScheme
+                                  .primaryContainer
+                              : Colors.white10,
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text('$pct%',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  color: active
+                                      ? Theme.of(context)
+                                          .colorScheme
+                                          .onPrimaryContainer
+                                      : Colors.white54,
+                                  fontWeight: FontWeight.w600,
+                                )),
+                            const SizedBox(height: 2),
+                            Text(
+                              _calc(base, pct),
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                                color: active
+                                    ? Theme.of(context)
+                                        .colorScheme
+                                        .primary
+                                    : Colors.white,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  }),
+                ),
+              );
+            }),
           ],
         ),
       ),
