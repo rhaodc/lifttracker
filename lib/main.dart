@@ -51,42 +51,63 @@ class RepRecord {
 
 class Lift {
   String name;
-  Map<int, RepRecord> bests;
+  List<RepRecord> history; // every logged record
+  Map<int, RepRecord> bests; // best weight per rep count (computed)
   List<Comment> comments;
   Map<String, List<String>> reactions;
 
   Lift({
     required this.name,
+    List<RepRecord>? history,
     Map<int, RepRecord>? bests,
     List<Comment>? comments,
     Map<String, List<String>>? reactions,
-  })  : bests = bests ?? {},
+  })  : history = history ?? [],
+        bests = bests ?? {},
         comments = comments ?? [],
         reactions = reactions ?? {};
 
+  /// Rebuild `bests` from the full `history`.
+  void recomputeBests() {
+    bests.clear();
+    for (final r in history) {
+      final cur = bests[r.reps];
+      if (cur == null || r.weight > cur.weight) bests[r.reps] = r;
+    }
+  }
+
   Map<String, dynamic> toJson() => {
         'name': name,
+        'history': history.map((r) => r.toJson()).toList(),
         'bests': bests.map((k, v) => MapEntry(k.toString(), v.toJson())),
         'comments': comments.map((c) => c.toJson()).toList(),
         'reactions': reactions.map((k, v) => MapEntry(k, v)),
       };
 
-  factory Lift.fromJson(Map<String, dynamic> j) => Lift(
-        name: j['name'] as String,
-        bests: (j['bests'] as Map<String, dynamic>? ?? {}).map(
-          (k, v) => MapEntry(
-            int.parse(k),
-            RepRecord.fromJson(v as Map<String, dynamic>),
-          ),
-        ),
-        comments: (j['comments'] as List<dynamic>? ?? [])
-            .map((e) => Comment.fromJson(e as Map<String, dynamic>))
-            .toList(),
-        reactions: (j['reactions'] as Map<String, dynamic>? ?? {}).map(
-          (k, v) => MapEntry(
-              k, (v as List<dynamic>).map((e) => e as String).toList()),
-        ),
-      );
+  factory Lift.fromJson(Map<String, dynamic> j) {
+    // Load stored history; if absent (old data), seed it from bests.
+    final history = (j['history'] as List<dynamic>? ?? [])
+        .map((e) => RepRecord.fromJson(e as Map<String, dynamic>))
+        .toList();
+    if (history.isEmpty && j['bests'] != null) {
+      (j['bests'] as Map<String, dynamic>).forEach((k, v) {
+        history.add(RepRecord.fromJson(v as Map<String, dynamic>));
+      });
+    }
+    final lift = Lift(
+      name: j['name'] as String,
+      history: history,
+      comments: (j['comments'] as List<dynamic>? ?? [])
+          .map((e) => Comment.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      reactions: (j['reactions'] as Map<String, dynamic>? ?? {}).map(
+        (k, v) => MapEntry(
+            k, (v as List<dynamic>).map((e) => e as String).toList()),
+      ),
+    );
+    lift.recomputeBests();
+    return lift;
+  }
 }
 
 class Profile {
@@ -1890,8 +1911,8 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
     if (picked != null) setState(() => _selectedDate = picked);
   }
 
-  void _addOrEditRecord({RepRecord? existing, int? existingReps}) {
-    int selectedReps = existingReps ?? 1;
+  void _addOrEditRecord({RepRecord? existing, int? existingIndex}) {
+    int selectedReps = existing?.reps ?? 1;
     final weightController = TextEditingController(
       text: existing != null
           ? (existing.weight % 1 == 0
@@ -2004,12 +2025,18 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
                   Navigator.pop(ctx);
                   setState(() {
                     _selectedDate = selectedDate;
-                    widget.lift.bests[selectedReps] = RepRecord(
+                    final record = RepRecord(
                       reps: selectedReps,
                       weight: w,
                       unit: unit,
                       date: selectedDate,
                     );
+                    if (existingIndex != null) {
+                      widget.lift.history[existingIndex] = record;
+                    } else {
+                      widget.lift.history.add(record);
+                    }
+                    widget.lift.recomputeBests();
                   });
                   widget.onChanged();
                 },
@@ -2022,8 +2049,11 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
     );
   }
 
-  void _deleteRecord(int reps) {
-    setState(() => widget.lift.bests.remove(reps));
+  void _deleteRecord(int historyIndex) {
+    setState(() {
+      widget.lift.history.removeAt(historyIndex);
+      widget.lift.recomputeBests();
+    });
     widget.onChanged();
   }
 
@@ -2062,10 +2092,10 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
   }
 
   Widget _buildChart() {
-    if (widget.lift.bests.isEmpty) return const SizedBox.shrink();
+    if (widget.lift.history.isEmpty) return const SizedBox.shrink();
 
     // Build spots from all records sorted by date
-    final records = widget.lift.bests.values.toList()
+    final records = [...widget.lift.history]
       ..sort((a, b) => a.date.compareTo(b.date));
 
     final spots = records.map((r) {
@@ -2217,8 +2247,12 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final sorted = widget.lift.bests.entries.toList()
-      ..sort((a, b) => a.key.compareTo(b.key));
+    // Pair each history record with its original index so edits/deletes work.
+    final sorted = widget.lift.history
+        .asMap()
+        .entries
+        .toList()
+      ..sort((a, b) => b.value.date.compareTo(a.value.date));
 
     return Scaffold(
       appBar: AppBar(
@@ -2253,8 +2287,9 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
                   )
                 else
                   ...sorted.map((entry) {
-                    final reps = entry.key;
+                    final historyIndex = entry.key;
                     final rec = entry.value;
+                    final isBest = widget.lift.bests[rec.reps] == rec;
                     final w = rec.weight % 1 == 0
                         ? rec.weight.toInt().toString()
                         : rec.weight.toStringAsFixed(1);
@@ -2276,7 +2311,7 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
                             ),
                             alignment: Alignment.center,
                             child: Text(
-                              '${reps}RM',
+                              '${rec.reps}RM',
                               style: TextStyle(
                                 fontWeight: FontWeight.bold,
                                 fontSize: 15,
@@ -2286,9 +2321,17 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
                               ),
                             ),
                           ),
-                          title: Text('$w ${rec.unit}',
-                              style: const TextStyle(
-                                  fontSize: 22, fontWeight: FontWeight.bold)),
+                          title: Row(children: [
+                            Text('$w ${rec.unit}',
+                                style: const TextStyle(
+                                    fontSize: 22,
+                                    fontWeight: FontWeight.bold)),
+                            if (isBest) ...[
+                              const SizedBox(width: 6),
+                              const Icon(Icons.star,
+                                  size: 14, color: Colors.amber),
+                            ],
+                          ]),
                           subtitle: Text(_formatDate(rec.date),
                               style: const TextStyle(
                                   fontSize: 12, color: Colors.white54)),
@@ -2298,12 +2341,14 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
                               IconButton(
                                 icon: const Icon(Icons.edit_outlined),
                                 onPressed: () => _addOrEditRecord(
-                                    existing: rec, existingReps: reps),
+                                    existing: rec,
+                                    existingIndex: historyIndex),
                               ),
                               IconButton(
                                 icon: const Icon(Icons.delete_outline,
                                     color: Colors.redAccent),
-                                onPressed: () => _deleteRecord(reps),
+                                onPressed: () =>
+                                    _deleteRecord(historyIndex),
                               ),
                             ],
                           ),
