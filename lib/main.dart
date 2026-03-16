@@ -12,7 +12,7 @@ void main() async {
 class RepRecord {
   final int reps;
   final double weight;
-  final String unit; // 'kg' or 'lbs'
+  final String unit;
   final DateTime date;
 
   RepRecord({
@@ -39,7 +39,7 @@ class RepRecord {
 
 class Lift {
   String name;
-  Map<int, RepRecord> bests; // reps → best record
+  Map<int, RepRecord> bests;
 
   Lift({required this.name, Map<int, RepRecord>? bests}) : bests = bests ?? {};
 
@@ -59,22 +59,42 @@ class Lift {
       );
 }
 
+class Profile {
+  String name;
+  List<Lift> lifts;
+
+  Profile({required this.name, List<Lift>? lifts}) : lifts = lifts ?? [];
+
+  Map<String, dynamic> toJson() => {
+        'name': name,
+        'lifts': lifts.map((l) => l.toJson()).toList(),
+      };
+
+  factory Profile.fromJson(Map<String, dynamic> j) => Profile(
+        name: j['name'] as String,
+        lifts: (j['lifts'] as List<dynamic>? ?? [])
+            .map((e) => Lift.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
+}
+
 // ─── Storage ─────────────────────────────────────────────────────────────────
 
 class LiftStore {
-  static const _key = 'lifts_v1';
+  static const _key = 'profiles_v1';
 
-  static Future<List<Lift>> load() async {
+  static Future<List<Profile>> load() async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_key);
     if (raw == null) return [];
     final list = jsonDecode(raw) as List<dynamic>;
-    return list.map((e) => Lift.fromJson(e as Map<String, dynamic>)).toList();
+    return list.map((e) => Profile.fromJson(e as Map<String, dynamic>)).toList();
   }
 
-  static Future<void> save(List<Lift> lifts) async {
+  static Future<void> save(List<Profile> profiles) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_key, jsonEncode(lifts.map((l) => l.toJson()).toList()));
+    await prefs.setString(
+        _key, jsonEncode(profiles.map((p) => p.toJson()).toList()));
   }
 }
 
@@ -95,22 +115,22 @@ class LiftTrackerApp extends StatelessWidget {
         ),
         useMaterial3: true,
       ),
-      home: const HomeScreen(),
+      home: const ProfileScreen(),
     );
   }
 }
 
-// ─── Home Screen ─────────────────────────────────────────────────────────────
+// ─── Profile Screen ───────────────────────────────────────────────────────────
 
-class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+class ProfileScreen extends StatefulWidget {
+  const ProfileScreen({super.key});
 
   @override
-  State<HomeScreen> createState() => _HomeScreenState();
+  State<ProfileScreen> createState() => _ProfileScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
-  List<Lift> lifts = [];
+class _ProfileScreenState extends State<ProfileScreen> {
+  List<Profile> profiles = [];
 
   @override
   void initState() {
@@ -120,10 +140,182 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _load() async {
     final loaded = await LiftStore.load();
-    setState(() => lifts = loaded);
+    setState(() => profiles = loaded);
   }
 
-  Future<void> _save() => LiftStore.save(lifts);
+  Future<void> _save() => LiftStore.save(profiles);
+
+  void _addProfile() {
+    final controller = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('New Profile'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          textCapitalization: TextCapitalization.words,
+          decoration: const InputDecoration(hintText: 'e.g. Robert'),
+          onSubmitted: (_) => _confirmAdd(controller.text),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () => _confirmAdd(controller.text),
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _confirmAdd(String name) {
+    name = name.trim();
+    if (name.isEmpty) return;
+    Navigator.pop(context);
+    setState(() => profiles.add(Profile(name: name)));
+    _save();
+  }
+
+  void _deleteProfile(int index) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Delete profile?'),
+        content: Text(
+            'Remove "${profiles[index].name}" and all their lifts?'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () {
+              Navigator.pop(context);
+              setState(() => profiles.removeAt(index));
+              _save();
+            },
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _initials(String name) {
+    final parts = name.trim().split(' ');
+    if (parts.length >= 2) {
+      return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
+    }
+    return name.substring(0, name.length >= 2 ? 2 : 1).toUpperCase();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Lift Tracker',
+            style: TextStyle(fontWeight: FontWeight.bold)),
+        centerTitle: true,
+      ),
+      body: profiles.isEmpty
+          ? const Center(
+              child: Text(
+                'No profiles yet.\nTap + to create one.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 16, color: Colors.white54),
+              ),
+            )
+          : GridView.builder(
+              padding: const EdgeInsets.all(20),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 2,
+                mainAxisSpacing: 16,
+                crossAxisSpacing: 16,
+                childAspectRatio: 1,
+              ),
+              itemCount: profiles.length,
+              itemBuilder: (context, i) {
+                final profile = profiles[i];
+                return GestureDetector(
+                  onTap: () async {
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => HomeScreen(
+                          profile: profile,
+                          onChanged: _save,
+                        ),
+                      ),
+                    );
+                    setState(() {});
+                  },
+                  onLongPress: () => _deleteProfile(i),
+                  child: Card(
+                    margin: EdgeInsets.zero,
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        CircleAvatar(
+                          radius: 36,
+                          backgroundColor:
+                              Theme.of(context).colorScheme.primaryContainer,
+                          child: Text(
+                            _initials(profile.name),
+                            style: TextStyle(
+                              fontSize: 24,
+                              fontWeight: FontWeight.bold,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onPrimaryContainer,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          profile.name,
+                          style: const TextStyle(
+                              fontSize: 16, fontWeight: FontWeight.w600),
+                          textAlign: TextAlign.center,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '${profile.lifts.length} lift${profile.lifts.length == 1 ? '' : 's'}',
+                          style: const TextStyle(
+                              fontSize: 13, color: Colors.white54),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _addProfile,
+        icon: const Icon(Icons.person_add),
+        label: const Text('Add Profile'),
+      ),
+    );
+  }
+}
+
+// ─── Home Screen ─────────────────────────────────────────────────────────────
+
+class HomeScreen extends StatefulWidget {
+  final Profile profile;
+  final VoidCallback onChanged;
+
+  const HomeScreen({super.key, required this.profile, required this.onChanged});
+
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  List<Lift> get lifts => widget.profile.lifts;
 
   void _addLift() {
     final controller = TextEditingController();
@@ -139,7 +331,9 @@ class _HomeScreenState extends State<HomeScreen> {
           onSubmitted: (_) => _confirmAdd(controller.text),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel')),
           FilledButton(
             onPressed: () => _confirmAdd(controller.text),
             child: const Text('Add'),
@@ -154,7 +348,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (name.isEmpty) return;
     Navigator.pop(context);
     setState(() => lifts.add(Lift(name: name)));
-    _save();
+    widget.onChanged();
   }
 
   void _deleteLift(int index) {
@@ -164,13 +358,15 @@ class _HomeScreenState extends State<HomeScreen> {
         title: const Text('Delete lift?'),
         content: Text('Remove "${lifts[index].name}" and all its records?'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel')),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () {
               Navigator.pop(context);
               setState(() => lifts.removeAt(index));
-              _save();
+              widget.onChanged();
             },
             child: const Text('Delete'),
           ),
@@ -181,7 +377,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
   String _subtitle(Lift lift) {
     if (lift.bests.isEmpty) return 'No records yet';
-    final sorted = lift.bests.entries.toList()..sort((a, b) => a.key.compareTo(b.key));
+    final sorted = lift.bests.entries.toList()
+      ..sort((a, b) => a.key.compareTo(b.key));
     return sorted.map((e) {
       final w = e.value.weight % 1 == 0
           ? e.value.weight.toInt().toString()
@@ -194,7 +391,8 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Lift Tracker', style: TextStyle(fontWeight: FontWeight.bold)),
+        title: Text(widget.profile.name,
+            style: const TextStyle(fontWeight: FontWeight.bold)),
         centerTitle: true,
       ),
       body: lifts.isEmpty
@@ -230,14 +428,14 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: Card(
                     margin: EdgeInsets.zero,
                     child: ListTile(
-                      contentPadding:
-                          const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 8),
                       title: Text(lift.name,
                           style: const TextStyle(
                               fontSize: 18, fontWeight: FontWeight.w600)),
                       subtitle: Text(_subtitle(lift),
-                          style:
-                              const TextStyle(fontSize: 13, color: Colors.white60)),
+                          style: const TextStyle(
+                              fontSize: 13, color: Colors.white60)),
                       trailing: const Icon(Icons.chevron_right),
                       onTap: () async {
                         await Navigator.push(
@@ -247,7 +445,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               lift: lift,
                               onChanged: () {
                                 setState(() {});
-                                _save();
+                                widget.onChanged();
                               },
                             ),
                           ),
@@ -273,7 +471,8 @@ class LiftDetailScreen extends StatefulWidget {
   final Lift lift;
   final VoidCallback onChanged;
 
-  const LiftDetailScreen({super.key, required this.lift, required this.onChanged});
+  const LiftDetailScreen(
+      {super.key, required this.lift, required this.onChanged});
 
   @override
   State<LiftDetailScreen> createState() => _LiftDetailScreenState();
@@ -309,13 +508,13 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
             children: [
               Text(
                 existing != null ? 'Edit Record' : 'Log New Record',
-                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                style:
+                    const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 24),
-
-              // Rep count selector
-              const Text('Reps', style: TextStyle(color: Colors.white60, fontSize: 13)),
+              const Text('Reps',
+                  style: TextStyle(color: Colors.white60, fontSize: 13)),
               const SizedBox(height: 8),
               Wrap(
                 spacing: 8,
@@ -346,8 +545,6 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
                 }).toList(),
               ),
               const SizedBox(height: 20),
-
-              // Weight + unit
               Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
@@ -355,8 +552,8 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
                     child: TextField(
                       controller: weightController,
                       autofocus: existing == null,
-                      keyboardType:
-                          const TextInputType.numberWithOptions(decimal: true),
+                      keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true),
                       decoration: const InputDecoration(
                         labelText: 'Weight',
                         border: OutlineInputBorder(),
@@ -376,7 +573,6 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
                 ],
               ),
               const SizedBox(height: 24),
-
               FilledButton(
                 onPressed: () {
                   final w = double.tryParse(weightController.text.trim());
@@ -447,13 +643,14 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
                 return Card(
                   margin: EdgeInsets.zero,
                   child: ListTile(
-                    contentPadding:
-                        const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                    contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 20, vertical: 10),
                     leading: Container(
                       width: 52,
                       height: 52,
                       decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.primaryContainer,
+                        color:
+                            Theme.of(context).colorScheme.primaryContainer,
                         borderRadius: BorderRadius.circular(12),
                       ),
                       alignment: Alignment.center,
@@ -462,7 +659,9 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
                         style: TextStyle(
                           fontWeight: FontWeight.bold,
                           fontSize: 15,
-                          color: Theme.of(context).colorScheme.onPrimaryContainer,
+                          color: Theme.of(context)
+                              .colorScheme
+                              .onPrimaryContainer,
                         ),
                       ),
                     ),
@@ -473,16 +672,16 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
                     ),
                     subtitle: Text(
                       _formatDate(rec.date),
-                      style:
-                          const TextStyle(fontSize: 12, color: Colors.white54),
+                      style: const TextStyle(
+                          fontSize: 12, color: Colors.white54),
                     ),
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         IconButton(
                           icon: const Icon(Icons.edit_outlined),
-                          onPressed: () =>
-                              _addOrEditRecord(existing: rec, existingReps: reps),
+                          onPressed: () => _addOrEditRecord(
+                              existing: rec, existingReps: reps),
                         ),
                         IconButton(
                           icon: const Icon(Icons.delete_outline,
