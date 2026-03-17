@@ -116,6 +116,7 @@ class Profile {
   String username;      // login handle
   String? passwordHash; // SHA-256 — null means not set up
   String? email;
+  bool isAdmin;
   List<Lift> lifts;
   List<Workout> workouts;
   List<String> goals;
@@ -127,6 +128,7 @@ class Profile {
     String? username,
     this.passwordHash,
     this.email,
+    this.isAdmin = false,
     List<Lift>? lifts,
     List<Workout>? workouts,
     List<String>? goals,
@@ -141,6 +143,7 @@ class Profile {
         'username': username,
         if (passwordHash != null) 'passwordHash': passwordHash,
         if (email != null) 'email': email,
+        if (isAdmin) 'isAdmin': true,
         'lifts': lifts.map((l) => l.toJson()).toList(),
         'workouts': workouts.map((w) => w.toJson()).toList(),
         'goals': goals,
@@ -155,6 +158,7 @@ class Profile {
       username: j['username'] as String? ?? name,
       passwordHash: j['passwordHash'] as String?,
       email: j['email'] as String?,
+      isAdmin: j['isAdmin'] as bool? ?? false,
       lifts: (j['lifts'] as List<dynamic>? ?? [])
           .map((e) => Lift.fromJson(e as Map<String, dynamic>))
           .toList(),
@@ -484,14 +488,92 @@ class _SignInScreenState extends State<SignInScreen> {
       return;
     }
     final profile = Profile.fromJson(snap.docs.first.data(), id: snap.docs.first.id);
-    if (profile.passwordHash == null ||
-        profile.passwordHash != _hashPassword(password)) {
+    if (profile.passwordHash == null) {
+      // No password set — prompt to create one
+      setState(() => _loading = false);
+      if (!mounted) return;
+      _promptSetPassword(profile);
+      return;
+    }
+    if (profile.passwordHash != _hashPassword(password)) {
       setState(() { _error = 'Incorrect password.'; _loading = false; });
       _pwCtrl.clear();
       return;
     }
     if (!mounted) return;
     _navigateToHome(context, profile);
+  }
+
+  void _promptSetPassword(Profile profile) {
+    final pw1 = TextEditingController();
+    final pw2 = TextEditingController();
+    String? dialogError;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialog) => AlertDialog(
+          title: Text('Set password for ${profile.name}'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'This account has no password yet. Create one to continue.',
+                style: TextStyle(fontSize: 13, color: Colors.white60),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: pw1,
+                obscureText: true,
+                decoration: const InputDecoration(
+                    labelText: 'New password',
+                    border: OutlineInputBorder()),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: pw2,
+                obscureText: true,
+                decoration: const InputDecoration(
+                    labelText: 'Confirm password',
+                    border: OutlineInputBorder()),
+              ),
+              if (dialogError != null) ...[
+                const SizedBox(height: 8),
+                Text(dialogError!,
+                    style: const TextStyle(
+                        color: Colors.redAccent, fontSize: 12)),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel')),
+            FilledButton(
+              onPressed: () async {
+                final p1 = pw1.text;
+                final p2 = pw2.text;
+                if (p1.isEmpty) {
+                  setDialog(() => dialogError = 'Password cannot be empty.');
+                  return;
+                }
+                if (p1 != p2) {
+                  setDialog(() => dialogError = 'Passwords do not match.');
+                  return;
+                }
+                profile.passwordHash = _hashPassword(p1);
+                await LiftStore.saveProfile(profile);
+                if (!ctx.mounted) return;
+                Navigator.pop(ctx);
+                if (!mounted) return;
+                _navigateToHome(context, profile);
+              },
+              child: const Text('Set Password'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -1020,7 +1102,7 @@ class _HomeScreenState extends State<HomeScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: 4, vsync: this);
     _tabController.addListener(() => setState(() {}));
   }
 
@@ -1160,18 +1242,30 @@ class _HomeScreenState extends State<HomeScreen>
         title: Text(widget.profile.name,
             style: const TextStyle(fontWeight: FontWeight.bold)),
         centerTitle: true,
+        actions: [
+          if (widget.profile.isAdmin)
+            IconButton(
+              icon: const Icon(Icons.admin_panel_settings),
+              tooltip: 'Admin Panel',
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const AdminScreen()),
+              ),
+            ),
+        ],
         bottom: TabBar(
           controller: _tabController,
           tabs: const [
             Tab(text: 'Dashboard'),
-            Tab(text: 'Personal Lifts'),
+            Tab(text: 'Lifts'),
             Tab(text: 'Workouts'),
+            Tab(text: 'Community'),
           ],
         ),
       ),
       body: TabBarView(
         controller: _tabController,
-        children: [_buildDashboardTab(), _buildLiftsTab(), _buildWorkoutsTab()],
+        children: [_buildDashboardTab(), _buildLiftsTab(), _buildWorkoutsTab(), _buildCommunityTab()],
       ),
       floatingActionButton: isOwn && _tabController.index == 1
           ? FloatingActionButton.extended(
@@ -1691,6 +1785,21 @@ class _HomeScreenState extends State<HomeScreen>
               ],
             ),
           ),
+          const SizedBox(height: 20),
+          StreamBuilder<List<Profile>>(
+            stream: LiftStore.stream(),
+            builder: (context, snap) {
+              final all = snap.data ?? [];
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _sectionHeader('Community Feed', Icons.dynamic_feed_outlined),
+                  const SizedBox(height: 8),
+                  _buildFeed(all),
+                ],
+              );
+            },
+          ),
         ],
       ),
     );
@@ -1845,6 +1954,218 @@ class _HomeScreenState extends State<HomeScreen>
               ),
             ),
           ),
+        );
+      },
+    );
+  }
+  String _timeAgo(DateTime d) {
+    final diff = DateTime.now().difference(d);
+    if (diff.inDays >= 1) return '${diff.inDays}d ago';
+    if (diff.inHours >= 1) return '${diff.inHours}h ago';
+    if (diff.inMinutes >= 1) return '${diff.inMinutes}m ago';
+    return 'just now';
+  }
+
+  Widget _buildFeed(List<Profile> allProfiles) {
+    final others = allProfiles
+        .where((p) => p.id != widget.currentUserId)
+        .toList();
+
+    final items = <({Profile profile, DateTime date, bool isLift, Lift? lift, RepRecord? record, Workout? workout})>[];
+    for (final p in others) {
+      for (final lift in p.lifts) {
+        for (final record in lift.history) {
+          items.add((profile: p, date: record.date, isLift: true,
+              lift: lift, record: record, workout: null));
+        }
+      }
+      for (final workout in p.workouts) {
+        items.add((profile: p, date: workout.date, isLift: false,
+            lift: null, record: null, workout: workout));
+      }
+    }
+    items.sort((a, b) => b.date.compareTo(a.date));
+    final recent = items.take(15).toList();
+
+    if (recent.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.only(top: 4, bottom: 8),
+        child: Text('No recent activity from others yet.',
+            style: TextStyle(color: Colors.white54, fontSize: 13)),
+      );
+    }
+
+    return Column(
+      children: recent.map((item) {
+        final photoData = item.profile.photoData;
+        String description;
+        VoidCallback onTap;
+
+        if (item.isLift) {
+          final w = item.record!.weight % 1 == 0
+              ? item.record!.weight.toInt().toString()
+              : item.record!.weight.toStringAsFixed(1);
+          description =
+              'logged $w ${item.record!.unit} ${item.record!.reps}RM — ${item.lift!.name}';
+          onTap = () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => LiftDetailScreen(
+                    lift: item.lift!,
+                    currentUserName: widget.currentUserName,
+                    isOwnProfile: false,
+                    onChanged: () => LiftStore.saveProfile(item.profile),
+                  ),
+                ),
+              );
+        } else {
+          final exNames = item.workout!.exercises
+              .map((e) => e.liftName)
+              .join(', ');
+          description =
+              'completed a ${item.workout!.type.label} workout${exNames.isNotEmpty ? ' · $exNames' : ''}';
+          onTap = () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => WorkoutDetailScreen(
+                    workout: item.workout!,
+                    profile: item.profile,
+                    currentUserName: widget.currentUserName,
+                    isOwnProfile: false,
+                    onChanged: () => LiftStore.saveProfile(item.profile),
+                  ),
+                ),
+              );
+        }
+
+        return InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(12),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                CircleAvatar(
+                  radius: 18,
+                  backgroundColor:
+                      Theme.of(context).colorScheme.primaryContainer,
+                  backgroundImage:
+                      photoData != null ? NetworkImage(photoData) : null,
+                  child: photoData == null
+                      ? Text(_initials(item.profile.name),
+                          style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onPrimaryContainer))
+                      : null,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      RichText(
+                        text: TextSpan(children: [
+                          TextSpan(
+                              text: item.profile.name,
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white,
+                                  fontSize: 13)),
+                          TextSpan(
+                              text: ' $description',
+                              style: const TextStyle(
+                                  color: Colors.white70, fontSize: 13)),
+                        ]),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(_timeAgo(item.date),
+                          style: const TextStyle(
+                              fontSize: 11, color: Colors.white38)),
+                    ],
+                  ),
+                ),
+                const Icon(Icons.chevron_right,
+                    size: 16, color: Colors.white38),
+              ],
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
+
+  Widget _buildCommunityTab() {
+    return StreamBuilder<List<Profile>>(
+      stream: LiftStore.stream(),
+      builder: (context, snap) {
+        if (snap.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        final profiles = (snap.data ?? [])
+            .where((p) => p.id != widget.profile.id)
+            .toList();
+
+        if (profiles.isEmpty) {
+          return const Center(
+            child: Text('No other profiles yet.',
+                style: TextStyle(color: Colors.white54)),
+          );
+        }
+
+        return ListView.separated(
+          padding: const EdgeInsets.all(16),
+          itemCount: profiles.length,
+          separatorBuilder: (_, _) => const SizedBox(height: 8),
+          itemBuilder: (_, i) {
+            final p = profiles[i];
+            final photoData = p.photoData;
+            return Card(
+              margin: EdgeInsets.zero,
+              child: ListTile(
+                contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16, vertical: 8),
+                leading: CircleAvatar(
+                  radius: 24,
+                  backgroundColor:
+                      Theme.of(context).colorScheme.primaryContainer,
+                  backgroundImage:
+                      photoData != null ? NetworkImage(photoData) : null,
+                  child: photoData == null
+                      ? Text(_initials(p.name),
+                          style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onPrimaryContainer))
+                      : null,
+                ),
+                title: Text(p.name,
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w600, fontSize: 16)),
+                subtitle: Text(
+                  '${p.lifts.length} lift${p.lifts.length == 1 ? '' : 's'} · ${p.workouts.length} workout${p.workouts.length == 1 ? '' : 's'}',
+                  style:
+                      const TextStyle(fontSize: 12, color: Colors.white54),
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => HomeScreen(
+                      profile: p,
+                      currentUserId: widget.currentUserId,
+                      currentUserName: widget.currentUserName,
+                      onChanged: () => LiftStore.saveProfile(p),
+                    ),
+                  ),
+                ),
+              ),
+            );
+          },
         );
       },
     );
@@ -2385,6 +2706,21 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
 
 // ─── Workout Screen ───────────────────────────────────────────────────────────
 
+enum _SetStatus { none, missed, succeeded }
+
+class _SetRow {
+  final TextEditingController reps;
+  final TextEditingController weight;
+  _SetStatus status;
+  _SetRow({String reps = '5', String weight = '', this.status = _SetStatus.none})
+      : reps = TextEditingController(text: reps),
+        weight = TextEditingController(text: weight);
+  void dispose() {
+    reps.dispose();
+    weight.dispose();
+  }
+}
+
 class WorkoutScreen extends StatefulWidget {
   final Profile profile;
   final VoidCallback onSaved;
@@ -2404,11 +2740,11 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
   final List<WorkoutExercise> _exercises = [];
   final Map<String, TextEditingController> _repsCtrl = {};
   final Map<String, TextEditingController> _weightCtrl = {};
+  final Map<String, List<_SetRow>> _setCtrl = {};
   final Map<String, String> _unitSel = {};
   final Map<String, FixedExtentScrollController> _otherScrollCtrl = {};
   final Map<String, TextEditingController> _otherValueCtrl = {};
-  static const _repOptions = [1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20];
-  static const _otherOptions = ['Reps', 'Weight', 'Height', 'RPE'];
+static const _otherOptions = ['Reps', 'Weight', 'Height', 'RPE'];
 
   @override
   void dispose() {
@@ -2416,6 +2752,9 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
     _resultCtrl.dispose();
     for (final c in _repsCtrl.values) { c.dispose(); }
     for (final c in _weightCtrl.values) { c.dispose(); }
+    for (final rows in _setCtrl.values) {
+      for (final r in rows) { r.dispose(); }
+    }
     for (final c in _otherScrollCtrl.values) { c.dispose(); }
     for (final c in _otherValueCtrl.values) { c.dispose(); }
     super.dispose();
@@ -2448,6 +2787,7 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
       _unitSel[name] = 'lbs';
       _otherScrollCtrl[name] = FixedExtentScrollController();
       _otherValueCtrl[name] = TextEditingController();
+      _setCtrl[name] = [_SetRow(), _SetRow(), _SetRow()];
     });
   }
 
@@ -2460,6 +2800,7 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
       _unitSel.remove(name);
       _otherScrollCtrl.remove(name)?.dispose();
       _otherValueCtrl.remove(name)?.dispose();
+      for (final r in _setCtrl.remove(name) ?? []) { r.dispose(); }
     });
   }
 
@@ -2483,120 +2824,19 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
     );
   }
 
-  void _addSet(WorkoutExercise exercise) {
-    int selectedReps = 5;
-    final weightCtrl = TextEditingController();
-    String unit = 'lbs';
-    DateTime setDate = _date;
-
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setModal) => Padding(
-          padding: EdgeInsets.fromLTRB(
-              24, 24, 24, MediaQuery.of(ctx).viewInsets.bottom + 24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text('Log Set — ${exercise.liftName}',
-                  style: const TextStyle(
-                      fontSize: 20, fontWeight: FontWeight.bold),
-                  textAlign: TextAlign.center),
-              const SizedBox(height: 12),
-              OutlinedButton.icon(
-                icon: const Icon(Icons.calendar_today_outlined, size: 16),
-                label: Text(_fmt(setDate)),
-                onPressed: () async {
-                  final picked = await showDatePicker(
-                    context: ctx,
-                    initialDate: setDate,
-                    firstDate: DateTime(2000),
-                    lastDate: DateTime.now(),
-                  );
-                  if (picked != null) setModal(() => setDate = picked);
-                },
-              ),
-              const SizedBox(height: 16),
-              const Text('Reps',
-                  style: TextStyle(color: Colors.white60, fontSize: 13)),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: _repOptions.map((r) {
-                  final sel = r == selectedReps;
-                  return GestureDetector(
-                    onTap: () => setModal(() => selectedReps = r),
-                    child: Container(
-                      width: 52,
-                      height: 44,
-                      decoration: BoxDecoration(
-                        color: sel
-                            ? Theme.of(context).colorScheme.primary
-                            : Colors.white12,
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      alignment: Alignment.center,
-                      child: Text('$r',
-                          style: TextStyle(
-                              fontWeight: FontWeight.w600,
-                              color: sel ? Colors.white : Colors.white70)),
-                    ),
-                  );
-                }).toList(),
-              ),
-              const SizedBox(height: 20),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: weightCtrl,
-                      autofocus: true,
-                      keyboardType: const TextInputType.numberWithOptions(
-                          decimal: true),
-                      decoration: const InputDecoration(
-                          labelText: 'Weight', border: OutlineInputBorder()),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  SegmentedButton<String>(
-                    segments: const [
-                      ButtonSegment(value: 'lbs', label: Text('lbs')),
-                      ButtonSegment(value: 'kg', label: Text('kg')),
-                    ],
-                    selected: {unit},
-                    onSelectionChanged: (s) =>
-                        setModal(() => unit = s.first),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 24),
-              FilledButton(
-                onPressed: () {
-                  final w = double.tryParse(weightCtrl.text.trim());
-                  if (w == null || w <= 0) return;
-                  Navigator.pop(ctx);
-                  setState(() => exercise.sets.add(
-                      WorkoutSet(reps: selectedReps, weight: w, unit: unit)));
-                },
-                child: const Text('Add Set', style: TextStyle(fontSize: 16)),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
   void _save() {
     for (final ex in _exercises) {
-      if (_type != WorkoutType.strength) {
+      if (_type == WorkoutType.strength) {
+        final unit = _unitSel[ex.liftName] ?? 'lbs';
+        ex.sets = (_setCtrl[ex.liftName] ?? [])
+            .where((r) => r.weight.text.trim().isNotEmpty)
+            .map((r) => WorkoutSet(
+                  reps: int.tryParse(r.reps.text.trim()) ?? 5,
+                  weight: double.tryParse(r.weight.text.trim()) ?? 0,
+                  unit: unit,
+                ))
+            .toList();
+      } else {
         ex.reps = int.tryParse(_repsCtrl[ex.liftName]?.text ?? '') ?? ex.reps;
         ex.weight =
             double.tryParse(_weightCtrl[ex.liftName]?.text.trim() ?? '');
@@ -2869,6 +3109,8 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
   }
 
   Widget _buildStrengthCard(WorkoutExercise ex, int i) {
+    final rows = _setCtrl[ex.liftName] ?? [];
+    final unit = _unitSel[ex.liftName] ?? 'lbs';
     return Card(
       margin: EdgeInsets.zero,
       child: Padding(
@@ -2876,82 +3118,395 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Header: name + unit toggle + close
             Row(children: [
               Expanded(
-                  child: Text(ex.liftName,
-                      style: const TextStyle(
-                          fontSize: 17, fontWeight: FontWeight.bold))),
-              IconButton(
-                icon: const Icon(Icons.close, size: 20),
-                onPressed: () => _removeExercise(i),
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
+                child: Text(ex.liftName,
+                    style: const TextStyle(
+                        fontSize: 17, fontWeight: FontWeight.bold)),
+              ),
+              SegmentedButton<String>(
+                segments: const [
+                  ButtonSegment(value: 'lbs', label: Text('lbs')),
+                  ButtonSegment(value: 'kg', label: Text('kg')),
+                ],
+                selected: {unit},
+                onSelectionChanged: (s) =>
+                    setState(() => _unitSel[ex.liftName] = s.first),
+                style: ButtonStyle(
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  visualDensity: VisualDensity.compact,
+                ),
+              ),
+              const SizedBox(width: 8),
+              GestureDetector(
+                onTap: () => _removeExercise(i),
+                child: const Icon(Icons.close,
+                    size: 20, color: Colors.white54),
               ),
             ]),
-            if (ex.sets.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              const Row(children: [
-                SizedBox(
-                    width: 36,
-                    child: Text('Set',
-                        style:
-                            TextStyle(fontSize: 12, color: Colors.white54))),
-                SizedBox(width: 8),
-                SizedBox(
-                    width: 52,
-                    child: Text('Reps',
-                        style:
-                            TextStyle(fontSize: 12, color: Colors.white54))),
-                SizedBox(width: 8),
-                Text('Weight',
-                    style: TextStyle(fontSize: 12, color: Colors.white54)),
-              ]),
-              const SizedBox(height: 4),
-              ...ex.sets.asMap().entries.map((e) {
-                final idx = e.key;
-                final s = e.value;
-                final w = s.weight % 1 == 0
-                    ? s.weight.toInt().toString()
-                    : s.weight.toStringAsFixed(1);
-                return Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 2),
-                  child: Row(children: [
+            const SizedBox(height: 10),
+            // Column headers
+            const Row(children: [
+              SizedBox(
+                  width: 28,
+                  child: Text('Set',
+                      style:
+                          TextStyle(fontSize: 11, color: Colors.white38))),
+              SizedBox(width: 8),
+              SizedBox(
+                  width: 64,
+                  child: Text('Reps',
+                      style:
+                          TextStyle(fontSize: 11, color: Colors.white38))),
+              SizedBox(width: 8),
+              Expanded(
+                  child: Text('Weight',
+                      style:
+                          TextStyle(fontSize: 11, color: Colors.white38))),
+              SizedBox(width: 84), // space for status buttons
+            ]),
+            const SizedBox(height: 6),
+            // Set rows
+            ...rows.asMap().entries.map((e) {
+              final idx = e.key;
+              final row = e.value;
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
                     SizedBox(
-                      width: 36,
+                      width: 28,
                       child: Text('${idx + 1}',
                           style: TextStyle(
                               fontSize: 14,
-                              color: Theme.of(context).colorScheme.primary,
-                              fontWeight: FontWeight.bold)),
+                              fontWeight: FontWeight.bold,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .primary)),
                     ),
                     const SizedBox(width: 8),
                     SizedBox(
-                        width: 52,
-                        child: Text('${s.reps}',
-                            style: const TextStyle(fontSize: 14))),
-                    const SizedBox(width: 8),
-                    Text('$w ${s.unit}',
-                        style: const TextStyle(fontSize: 14)),
-                    const Spacer(),
-                    GestureDetector(
-                      onTap: () =>
-                          setState(() => ex.sets.removeAt(idx)),
-                      child: const Icon(Icons.close,
-                          size: 16, color: Colors.white38),
+                      width: 64,
+                      child: TextField(
+                        controller: row.reps,
+                        keyboardType: TextInputType.number,
+                        textAlign: TextAlign.center,
+                        decoration: const InputDecoration(
+                          isDense: true,
+                          border: OutlineInputBorder(),
+                          contentPadding: EdgeInsets.symmetric(
+                              vertical: 8, horizontal: 6),
+                        ),
+                      ),
                     ),
-                  ]),
-                );
-              }),
-            ],
-            const SizedBox(height: 12),
-            TextButton.icon(
-              icon: const Icon(Icons.add, size: 18),
-              label: const Text('Add Set'),
-              onPressed: () => _addSet(ex),
-              style: TextButton.styleFrom(padding: EdgeInsets.zero),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: TextField(
+                        controller: row.weight,
+                        keyboardType:
+                            const TextInputType.numberWithOptions(
+                                decimal: true),
+                        textAlign: TextAlign.center,
+                        decoration: const InputDecoration(
+                          isDense: true,
+                          border: OutlineInputBorder(),
+                          contentPadding: EdgeInsets.symmetric(
+                              vertical: 8, horizontal: 6),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    // Miss button
+                    GestureDetector(
+                      onTap: () => setState(() {
+                        row.status = row.status == _SetStatus.missed
+                            ? _SetStatus.none
+                            : _SetStatus.missed;
+                      }),
+                      child: Container(
+                        width: 34,
+                        height: 34,
+                        decoration: BoxDecoration(
+                          color: row.status == _SetStatus.missed
+                              ? Colors.red
+                              : Colors.white10,
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Icon(Icons.close,
+                            size: 18,
+                            color: row.status == _SetStatus.missed
+                                ? Colors.white
+                                : Colors.white38),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    // Success button
+                    GestureDetector(
+                      onTap: () => setState(() {
+                        row.status = row.status == _SetStatus.succeeded
+                            ? _SetStatus.none
+                            : _SetStatus.succeeded;
+                      }),
+                      child: Container(
+                        width: 34,
+                        height: 34,
+                        decoration: BoxDecoration(
+                          color: row.status == _SetStatus.succeeded
+                              ? Colors.green
+                              : Colors.white10,
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Icon(Icons.check,
+                            size: 18,
+                            color: row.status == _SetStatus.succeeded
+                                ? Colors.white
+                                : Colors.white38),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.add_circle_outline, size: 22),
+                  tooltip: 'Add set',
+                  onPressed: () => setState(() {
+                    final prev = rows.isNotEmpty ? rows.last : null;
+                    rows.add(_SetRow(
+                      reps: prev?.reps.text ?? '5',
+                      weight: prev?.weight.text ?? '',
+                    ));
+                  }),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                  visualDensity: VisualDensity.compact,
+                ),
+                const SizedBox(width: 16),
+                IconButton(
+                  icon: const Icon(Icons.remove_circle_outline, size: 22),
+                  tooltip: 'Remove last set',
+                  onPressed: rows.isEmpty
+                      ? null
+                      : () => setState(() => rows.removeLast()..dispose()),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                  visualDensity: VisualDensity.compact,
+                ),
+              ],
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+// ─── Admin Screen ─────────────────────────────────────────────────────────────
+
+class AdminScreen extends StatefulWidget {
+  const AdminScreen({super.key});
+
+  @override
+  State<AdminScreen> createState() => _AdminScreenState();
+}
+
+class _AdminScreenState extends State<AdminScreen> {
+  String _initials(String name) {
+    final parts = name.trim().split(' ');
+    if (parts.length >= 2) return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
+    return name.substring(0, name.length >= 2 ? 2 : 1).toUpperCase();
+  }
+
+  void _editProfile(Profile profile) {
+    final usernameCtrl = TextEditingController(text: profile.username);
+    final emailCtrl = TextEditingController(text: profile.email ?? '');
+    final passwordCtrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Edit — ${profile.name}'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: usernameCtrl,
+              decoration: const InputDecoration(
+                  labelText: 'Username', border: OutlineInputBorder()),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: emailCtrl,
+              decoration: const InputDecoration(
+                  labelText: 'Email', border: OutlineInputBorder()),
+              keyboardType: TextInputType.emailAddress,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: passwordCtrl,
+              obscureText: true,
+              decoration: const InputDecoration(
+                  labelText: 'New password (leave blank to keep)',
+                  border: OutlineInputBorder()),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () async {
+              final newUsername = usernameCtrl.text.trim();
+              final newEmail = emailCtrl.text.trim();
+              final newPassword = passwordCtrl.text;
+              Navigator.pop(ctx);
+              if (newUsername.isNotEmpty) profile.username = newUsername;
+              if (newEmail.isNotEmpty) profile.email = newEmail;
+              if (newPassword.isNotEmpty) {
+                profile.passwordHash = _hashPassword(newPassword);
+              }
+              await LiftStore.saveProfile(profile);
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _confirmDelete(Profile profile) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Delete profile?'),
+        content: Text('Permanently remove "${profile.name}" and all their data?'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () {
+              Navigator.pop(context);
+              LiftStore.deleteProfile(profile.id!);
+            },
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Admin Panel',
+            style: TextStyle(fontWeight: FontWeight.bold)),
+        centerTitle: true,
+      ),
+      body: StreamBuilder<List<Profile>>(
+        stream: LiftStore.stream(),
+        builder: (context, snap) {
+          if (!snap.hasData) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          final profiles = snap.data!;
+          return ListView.separated(
+            padding: const EdgeInsets.all(16),
+            itemCount: profiles.length,
+            separatorBuilder: (_, _) => const SizedBox(height: 8),
+            itemBuilder: (context, i) {
+              final p = profiles[i];
+              return Card(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 16, vertical: 12),
+                  child: Row(
+                    children: [
+                      CircleAvatar(
+                        radius: 22,
+                        backgroundImage: p.photoData != null
+                            ? NetworkImage(p.photoData!)
+                            : null,
+                        child: p.photoData == null
+                            ? Text(_initials(p.name),
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.bold))
+                            : null,
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(children: [
+                              Text(p.name,
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 15)),
+                              if (p.isAdmin) ...[
+                                const SizedBox(width: 6),
+                                const Icon(Icons.admin_panel_settings,
+                                    size: 14, color: Colors.amber),
+                              ],
+                            ]),
+                            const SizedBox(height: 2),
+                            _adminRow(Icons.person_outline, 'Username',
+                                p.username),
+                            _adminRow(Icons.email_outlined, 'Email',
+                                p.email ?? '—'),
+                            _adminRow(Icons.lock_outline, 'Password hash',
+                                p.passwordHash != null
+                                    ? '${p.passwordHash!.substring(0, 16)}…'
+                                    : '—'),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.edit_outlined),
+                        tooltip: 'Edit profile',
+                        onPressed: () => _editProfile(p),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.delete_outline,
+                            color: Colors.red),
+                        tooltip: 'Delete profile',
+                        onPressed: p.id == null
+                            ? null
+                            : () => _confirmDelete(p),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _adminRow(IconData icon, String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 3),
+      child: Row(
+        children: [
+          Icon(icon, size: 12, color: Colors.white38),
+          const SizedBox(width: 4),
+          Text('$label: ',
+              style: const TextStyle(fontSize: 11, color: Colors.white38)),
+          Expanded(
+            child: Text(value,
+                style: const TextStyle(fontSize: 11, color: Colors.white70),
+                overflow: TextOverflow.ellipsis),
+          ),
+        ],
       ),
     );
   }
@@ -3535,6 +4090,7 @@ class _WeightCalculatorCard extends StatefulWidget {
 class _WeightCalculatorCardState extends State<_WeightCalculatorCard> {
   final _baseCtrl = TextEditingController();
   final _customCtrl = TextEditingController();
+  bool _expanded = false;
 
   // Descending: 110 → 40, 3 rows × 5 cols
   static const _pcts = [
@@ -3567,13 +4123,25 @@ class _WeightCalculatorCardState extends State<_WeightCalculatorCard> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(children: [
-              Icon(Icons.calculate_outlined,
-                  size: 16, color: Theme.of(context).colorScheme.primary),
-              const SizedBox(width: 6),
-              const Text('Weight Calculator',
-                  style: TextStyle(fontSize: 12, color: Colors.white54)),
-            ]),
+            GestureDetector(
+              onTap: () => setState(() => _expanded = !_expanded),
+              behavior: HitTestBehavior.opaque,
+              child: Row(children: [
+                Icon(Icons.calculate_outlined,
+                    size: 16, color: Theme.of(context).colorScheme.primary),
+                const SizedBox(width: 6),
+                const Expanded(
+                  child: Text('Weight Calculator',
+                      style: TextStyle(fontSize: 12, color: Colors.white54)),
+                ),
+                Icon(
+                  _expanded ? Icons.expand_less : Icons.expand_more,
+                  size: 18,
+                  color: Colors.white38,
+                ),
+              ]),
+            ),
+            if (_expanded) ...[
             const SizedBox(height: 12),
             // Base weight input
             TextField(
@@ -3687,6 +4255,7 @@ class _WeightCalculatorCardState extends State<_WeightCalculatorCard> {
                 ),
               );
             }),
+            ], // end if (_expanded)
           ],
         ),
       ),
