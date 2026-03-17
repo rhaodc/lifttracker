@@ -1186,7 +1186,7 @@ class _HomeScreenState extends State<HomeScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 5, vsync: this);
+    _tabController = TabController(length: 4, vsync: this);
     _tabController.addListener(() => setState(() {}));
   }
 
@@ -1358,14 +1358,13 @@ class _HomeScreenState extends State<HomeScreen>
             Tab(text: 'Dashboard'),
             Tab(text: 'Lifts'),
             Tab(text: 'Workouts'),
-            Tab(text: 'Program'),
             Tab(text: 'Community'),
           ],
         ),
       ),
       body: TabBarView(
         controller: _tabController,
-        children: [_buildDashboardTab(), _buildLiftsTab(), _buildWorkoutsTab(), _buildProgramTab(), _buildCommunityTab()],
+        children: [_buildDashboardTab(), _buildLiftsTab(), _buildProgramTab(), _buildCommunityTab()],
       ),
       floatingActionButton: isOwn && _tabController.index == 1
           ? FloatingActionButton.extended(
@@ -1373,13 +1372,7 @@ class _HomeScreenState extends State<HomeScreen>
               icon: const Icon(Icons.add),
               label: const Text('Add Lift'),
             )
-          : isOwn && _tabController.index == 2
-              ? FloatingActionButton.extended(
-                  onPressed: _logWorkout,
-                  icon: const Icon(Icons.fitness_center),
-                  label: const Text('Log Workout'),
-                )
-              : null,
+          : null,
     );
   }
 
@@ -1982,82 +1975,7 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  Widget _buildWorkoutsTab() {
-    final isOwn = widget.profile.id == widget.currentUserId;
-    if (workouts.isEmpty) {
-      return const Center(
-        child: Text(
-          'No workouts yet.\nTap + to log one.',
-          textAlign: TextAlign.center,
-          style: TextStyle(fontSize: 16, color: Colors.white54),
-        ),
-      );
-    }
-    final sorted = [...workouts]
-      ..sort((a, b) => b.date.compareTo(a.date));
-    return ListView.separated(
-      padding: const EdgeInsets.all(16),
-      itemCount: sorted.length,
-      separatorBuilder: (_, _) => const SizedBox(height: 8),
-      itemBuilder: (_, i) {
-        final workout = sorted[i];
-        final exerciseNames =
-            workout.exercises.map((e) => e.liftName).join(' · ');
-        return Card(
-          margin: EdgeInsets.zero,
-          child: ListTile(
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            title: Row(children: [
-              Text(_fmtDate(workout.date),
-                  style: const TextStyle(
-                      fontSize: 16, fontWeight: FontWeight.w600)),
-              const SizedBox(width: 8),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.primaryContainer,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(workout.type.label,
-                    style: TextStyle(
-                        fontSize: 11,
-                        color: Theme.of(context)
-                            .colorScheme
-                            .onPrimaryContainer)),
-              ),
-            ]),
-            subtitle: Text(
-              exerciseNames.isEmpty ? 'No exercises' : exerciseNames,
-              style: const TextStyle(fontSize: 13, color: Colors.white60),
-              overflow: TextOverflow.ellipsis,
-            ),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _reactionSummary(workout.reactions),
-                const SizedBox(width: 4),
-                const Icon(Icons.chevron_right),
-              ],
-            ),
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => WorkoutDetailScreen(
-                  workout: workout,
-                  profile: widget.profile,
-                  currentUserName: widget.currentUserName,
-                  isOwnProfile: isOwn,
-                  onChanged: widget.onChanged,
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
+
   String _timeAgo(DateTime d) {
     final diff = DateTime.now().difference(d);
     if (diff.inDays >= 1) return '${diff.inDays}d ago';
@@ -2202,6 +2120,7 @@ class _HomeScreenState extends State<HomeScreen>
     return _ProgramTabView(
       profile: widget.profile,
       onChanged: widget.onChanged,
+      onAddWorkout: _logWorkout,
     );
   }
 
@@ -3422,7 +3341,8 @@ static const _otherOptions = ['Reps', 'Weight', 'Height', 'RPE'];
 class _ProgramTabView extends StatefulWidget {
   final Profile profile;
   final VoidCallback onChanged;
-  const _ProgramTabView({required this.profile, required this.onChanged});
+  final VoidCallback onAddWorkout;
+  const _ProgramTabView({required this.profile, required this.onChanged, required this.onAddWorkout});
 
   @override
   State<_ProgramTabView> createState() => _ProgramTabViewState();
@@ -3748,16 +3668,27 @@ class _ProgramTabViewState extends State<_ProgramTabView> {
                   },
                 ),
         ),
-        // ── Add Program button ──
+        // ── Action buttons ──
         Padding(
           padding: const EdgeInsets.all(16),
-          child: SizedBox(
-            width: double.infinity,
-            child: FilledButton.icon(
-              icon: const Icon(Icons.add),
-              label: const Text('Add Program'),
-              onPressed: _addExercises,
-            ),
+          child: Row(
+            children: [
+              Expanded(
+                child: FilledButton.icon(
+                  icon: const Icon(Icons.calendar_today_outlined),
+                  label: const Text('Add Program'),
+                  onPressed: _addExercises,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: FilledButton.icon(
+                  icon: const Icon(Icons.fitness_center),
+                  label: const Text('Add Workout'),
+                  onPressed: widget.onAddWorkout,
+                ),
+              ),
+            ],
           ),
         ),
       ],
