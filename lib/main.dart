@@ -2656,23 +2656,25 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
                           subtitle: Text(_formatDate(rec.date),
                               style: const TextStyle(
                                   fontSize: 12, color: Colors.white54)),
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              IconButton(
-                                icon: const Icon(Icons.edit_outlined),
-                                onPressed: () => _addOrEditRecord(
-                                    existing: rec,
-                                    existingIndex: historyIndex),
-                              ),
-                              IconButton(
-                                icon: const Icon(Icons.delete_outline,
-                                    color: Colors.redAccent),
-                                onPressed: () =>
-                                    _deleteRecord(historyIndex),
-                              ),
-                            ],
-                          ),
+                          trailing: widget.isOwnProfile
+                              ? Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    IconButton(
+                                      icon: const Icon(Icons.edit_outlined),
+                                      onPressed: () => _addOrEditRecord(
+                                          existing: rec,
+                                          existingIndex: historyIndex),
+                                    ),
+                                    IconButton(
+                                      icon: const Icon(Icons.delete_outline,
+                                          color: Colors.redAccent),
+                                      onPressed: () =>
+                                          _deleteRecord(historyIndex),
+                                    ),
+                                  ],
+                                )
+                              : null,
                         ),
                       ),
                     );
@@ -2683,14 +2685,16 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
                   comments: widget.lift.comments,
                   onChanged: widget.onChanged,
                   onDeleteComment: _deleteComment,
+                  isOwnProfile: widget.isOwnProfile,
                 ),
               ],
             ),
           ),
-          _CommentInputBar(
-            controller: _commentCtrl,
-            onSubmit: _addComment,
-          ),
+          if (!widget.isOwnProfile)
+            _CommentInputBar(
+              controller: _commentCtrl,
+              onSubmit: _addComment,
+            ),
         ],
       ),
       floatingActionButton: widget.isOwnProfile
@@ -2711,8 +2715,8 @@ enum _SetStatus { none, missed, succeeded }
 class _SetRow {
   final TextEditingController reps;
   final TextEditingController weight;
-  _SetStatus status;
-  _SetRow({String reps = '5', String weight = '', this.status = _SetStatus.none})
+  _SetStatus status = _SetStatus.none;
+  _SetRow({String reps = '5', String weight = ''})
       : reps = TextEditingController(text: reps),
         weight = TextEditingController(text: weight);
   void dispose() {
@@ -3761,14 +3765,16 @@ class _WorkoutDetailScreenState extends State<WorkoutDetailScreen> {
                   comments: widget.workout.comments,
                   onChanged: widget.onChanged,
                   onDeleteComment: _deleteComment,
+                  isOwnProfile: widget.isOwnProfile,
                 ),
               ],
             ),
           ),
-          _CommentInputBar(
-            controller: _commentCtrl,
-            onSubmit: _addComment,
-          ),
+          if (!widget.isOwnProfile)
+            _CommentInputBar(
+              controller: _commentCtrl,
+              onSubmit: _addComment,
+            ),
         ],
       ),
     );
@@ -3867,6 +3873,7 @@ class _SocialSection extends StatefulWidget {
   final List<Comment> comments;
   final VoidCallback onChanged;
   final void Function(int) onDeleteComment;
+  final bool isOwnProfile;
 
   const _SocialSection({
     required this.currentUserName,
@@ -3874,6 +3881,7 @@ class _SocialSection extends StatefulWidget {
     required this.comments,
     required this.onChanged,
     required this.onDeleteComment,
+    this.isOwnProfile = false,
   });
 
   @override
@@ -3915,51 +3923,87 @@ class _SocialSectionState extends State<_SocialSection> {
         children: [
           const Divider(height: 32),
           // Reactions
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: _emojis.map((emoji) {
-              final list = widget.reactions[emoji] ?? [];
-              final reacted = list.contains(widget.currentUserName);
-              return GestureDetector(
-                onTap: () => _toggle(emoji),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 150),
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: reacted
-                        ? Theme.of(context).colorScheme.primaryContainer
-                        : Colors.white10,
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(
+          Builder(builder: (context) {
+            final activeReactions = _emojis
+                .where((e) => (widget.reactions[e] ?? []).isNotEmpty)
+                .toList();
+            if (widget.isOwnProfile) {
+              // Read-only: show counts of reactions others left
+              if (activeReactions.isEmpty) return const SizedBox.shrink();
+              return Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: activeReactions.map((emoji) {
+                  final list = widget.reactions[emoji]!;
+                  return Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.white10,
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(emoji, style: const TextStyle(fontSize: 20)),
+                        const SizedBox(width: 4),
+                        Text('${list.length}',
+                            style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.white60)),
+                      ],
+                    ),
+                  );
+                }).toList(),
+              );
+            }
+            // Interactive reaction buttons for other profiles
+            return Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: _emojis.map((emoji) {
+                final list = widget.reactions[emoji] ?? [];
+                final reacted = list.contains(widget.currentUserName);
+                return GestureDetector(
+                  onTap: () => _toggle(emoji),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 150),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
                       color: reacted
-                          ? Theme.of(context).colorScheme.primary
-                          : Colors.transparent,
+                          ? Theme.of(context).colorScheme.primaryContainer
+                          : Colors.white10,
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: reacted
+                            ? Theme.of(context).colorScheme.primary
+                            : Colors.transparent,
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(emoji, style: const TextStyle(fontSize: 20)),
+                        if (list.isNotEmpty) ...[
+                          const SizedBox(width: 4),
+                          Text(
+                            '${list.length}',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: reacted
+                                  ? Theme.of(context).colorScheme.onPrimaryContainer
+                                  : Colors.white60,
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                   ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(emoji, style: const TextStyle(fontSize: 20)),
-                      if (list.isNotEmpty) ...[
-                        const SizedBox(width: 4),
-                        Text(
-                          '${list.length}',
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: reacted
-                                ? Theme.of(context).colorScheme.onPrimaryContainer
-                                : Colors.white60,
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-              );
-            }).toList(),
-          ),
+                );
+              }).toList(),
+            );
+          }),
           const SizedBox(height: 20),
           // Comments header
           Text(
