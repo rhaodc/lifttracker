@@ -1252,6 +1252,21 @@ class _HomeScreenState extends State<HomeScreen>
                 MaterialPageRoute(builder: (_) => const AdminScreen()),
               ),
             ),
+          if (isOwn)
+            IconButton(
+              icon: const Icon(Icons.settings_outlined),
+              tooltip: 'Settings',
+              onPressed: () async {
+                await Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => SettingsScreen(profile: widget.profile),
+                  ),
+                );
+                setState(() {});
+                widget.onChanged();
+              },
+            ),
         ],
         bottom: TabBar(
           controller: _tabController,
@@ -3305,6 +3320,226 @@ static const _otherOptions = ['Reps', 'Weight', 'Height', 'RPE'];
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+// ─── Settings Screen ──────────────────────────────────────────────────────────
+
+class SettingsScreen extends StatefulWidget {
+  final Profile profile;
+  const SettingsScreen({super.key, required this.profile});
+
+  @override
+  State<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends State<SettingsScreen> {
+  late final TextEditingController _usernameCtrl;
+  late final TextEditingController _emailCtrl;
+  bool _saving = false;
+  String? _error;
+  String? _success;
+
+  @override
+  void initState() {
+    super.initState();
+    _usernameCtrl = TextEditingController(text: widget.profile.username);
+    _emailCtrl = TextEditingController(text: widget.profile.email ?? '');
+  }
+
+  @override
+  void dispose() {
+    _usernameCtrl.dispose();
+    _emailCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _saveDetails() async {
+    final newUsername = _usernameCtrl.text.trim();
+    final newEmail = _emailCtrl.text.trim();
+    if (newUsername.isEmpty) {
+      setState(() => _error = 'Username cannot be empty.');
+      return;
+    }
+    // Check uniqueness if username changed
+    if (newUsername != widget.profile.username) {
+      final snap = await FirebaseFirestore.instance
+          .collection('profiles')
+          .where('username', isEqualTo: newUsername)
+          .limit(1)
+          .get();
+      if (snap.docs.isNotEmpty && snap.docs.first.id != widget.profile.id) {
+        setState(() => _error = 'That username is already taken.');
+        return;
+      }
+    }
+    setState(() { _saving = true; _error = null; _success = null; });
+    widget.profile.username = newUsername;
+    if (newEmail.isNotEmpty) widget.profile.email = newEmail;
+    await LiftStore.saveProfile(widget.profile);
+    setState(() { _saving = false; _success = 'Details saved.'; });
+  }
+
+  Future<void> _changePassword() async {
+    final currentCtrl = TextEditingController();
+    final newCtrl = TextEditingController();
+    final confirmCtrl = TextEditingController();
+    bool step2 = false; // false = enter current pw, true = enter new pw
+    String? dialogError;
+
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlg) => AlertDialog(
+          title: const Text('Change Password'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (!step2) ...[
+                const Text('Enter your current password to continue.',
+                    style: TextStyle(fontSize: 13, color: Colors.white70)),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: currentCtrl,
+                  obscureText: true,
+                  autofocus: true,
+                  decoration: const InputDecoration(
+                      labelText: 'Current password',
+                      border: OutlineInputBorder()),
+                ),
+              ] else ...[
+                TextField(
+                  controller: newCtrl,
+                  obscureText: true,
+                  autofocus: true,
+                  decoration: const InputDecoration(
+                      labelText: 'New password',
+                      border: OutlineInputBorder()),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: confirmCtrl,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                      labelText: 'Confirm new password',
+                      border: OutlineInputBorder()),
+                ),
+              ],
+              if (dialogError != null) ...[
+                const SizedBox(height: 10),
+                Text(dialogError!,
+                    style: const TextStyle(color: Colors.redAccent, fontSize: 13)),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel')),
+            FilledButton(
+              onPressed: () async {
+                if (!step2) {
+                  // Verify current password
+                  final hash = _hashPassword(currentCtrl.text);
+                  if (hash != widget.profile.passwordHash) {
+                    setDlg(() => dialogError = 'Incorrect password.');
+                    return;
+                  }
+                  setDlg(() { step2 = true; dialogError = null; });
+                } else {
+                  // Save new password
+                  final pw = newCtrl.text;
+                  final confirm = confirmCtrl.text;
+                  if (pw.length < 6) {
+                    setDlg(() => dialogError = 'Password must be at least 6 characters.');
+                    return;
+                  }
+                  if (pw != confirm) {
+                    setDlg(() => dialogError = 'Passwords do not match.');
+                    return;
+                  }
+                  widget.profile.passwordHash = _hashPassword(pw);
+                  await LiftStore.saveProfile(widget.profile);
+                  if (ctx.mounted) Navigator.pop(ctx);
+                  setState(() => _success = 'Password updated.');
+                }
+              },
+              child: Text(step2 ? 'Save' : 'Continue'),
+            ),
+          ],
+        ),
+      ),
+    );
+    currentCtrl.dispose();
+    newCtrl.dispose();
+    confirmCtrl.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Settings', style: TextStyle(fontWeight: FontWeight.bold)),
+        centerTitle: true,
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(24),
+        children: [
+          const Text('Account Details',
+              style: TextStyle(fontSize: 13, color: Colors.white54, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _usernameCtrl,
+            decoration: const InputDecoration(
+              labelText: 'Username',
+              border: OutlineInputBorder(),
+              prefixIcon: Icon(Icons.person_outline),
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _emailCtrl,
+            keyboardType: TextInputType.emailAddress,
+            decoration: const InputDecoration(
+              labelText: 'Email',
+              border: OutlineInputBorder(),
+              prefixIcon: Icon(Icons.email_outlined),
+            ),
+          ),
+          const SizedBox(height: 20),
+          if (_error != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Text(_error!, style: const TextStyle(color: Colors.redAccent)),
+            ),
+          if (_success != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Text(_success!, style: const TextStyle(color: Colors.greenAccent)),
+            ),
+          FilledButton(
+            onPressed: _saving ? null : _saveDetails,
+            child: _saving
+                ? const SizedBox(
+                    width: 18, height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2))
+                : const Text('Save Changes'),
+          ),
+          const SizedBox(height: 32),
+          const Divider(),
+          const SizedBox(height: 24),
+          const Text('Security',
+              style: TextStyle(fontSize: 13, color: Colors.white54, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 16),
+          OutlinedButton.icon(
+            icon: const Icon(Icons.lock_outline),
+            label: const Text('Change Password'),
+            onPressed: _changePassword,
+          ),
+        ],
       ),
     );
   }
