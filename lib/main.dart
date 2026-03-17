@@ -121,6 +121,7 @@ class Profile {
   List<Workout> workouts;
   List<String> goals;
   String? photoData; // base64 data URL
+  List<ProgramDay> program;
 
   Profile({
     this.id,
@@ -133,10 +134,12 @@ class Profile {
     List<Workout>? workouts,
     List<String>? goals,
     this.photoData,
+    List<ProgramDay>? program,
   })  : username = username ?? name,
         lifts = lifts ?? [],
         workouts = workouts ?? [],
-        goals = goals ?? [];
+        goals = goals ?? [],
+        program = program ?? [];
 
   Map<String, dynamic> toJson() => {
         'name': name,
@@ -148,6 +151,7 @@ class Profile {
         'workouts': workouts.map((w) => w.toJson()).toList(),
         'goals': goals,
         if (photoData != null) 'photoData': photoData,
+        'program': program.map((d) => d.toJson()).toList(),
       };
 
   factory Profile.fromJson(Map<String, dynamic> j, {String? id}) {
@@ -169,6 +173,9 @@ class Profile {
           .map((e) => e as String)
           .toList(),
       photoData: j['photoData'] as String?,
+      program: (j['program'] as List<dynamic>? ?? [])
+          .map((e) => ProgramDay.fromJson(e as Map<String, dynamic>))
+          .toList(),
     );
   }
 }
@@ -312,6 +319,83 @@ class Workout {
           (k, v) => MapEntry(
               k, (v as List<dynamic>).map((e) => e as String).toList()),
         ),
+      );
+}
+
+// ─── Program Models ──────────────────────────────────────────────────────────
+
+class ProgramSet {
+  int reps;
+  double? weight;
+  String unit;
+  double? rpe;
+  SetStatus status;
+
+  ProgramSet({
+    this.reps = 5,
+    this.weight,
+    this.unit = 'lbs',
+    this.rpe,
+    this.status = SetStatus.none,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'reps': reps,
+        if (weight != null) 'weight': weight,
+        'unit': unit,
+        if (rpe != null) 'rpe': rpe,
+        'status': status.name,
+      };
+
+  factory ProgramSet.fromJson(Map<String, dynamic> j) => ProgramSet(
+        reps: j['reps'] as int? ?? 5,
+        weight: (j['weight'] as num?)?.toDouble(),
+        unit: j['unit'] as String? ?? 'lbs',
+        rpe: (j['rpe'] as num?)?.toDouble(),
+        status: SetStatus.values.firstWhere(
+          (s) => s.name == (j['status'] as String? ?? 'none'),
+          orElse: () => SetStatus.none,
+        ),
+      );
+}
+
+class ProgramExercise {
+  String name;
+  List<ProgramSet> sets;
+
+  ProgramExercise({required this.name, List<ProgramSet>? sets})
+      : sets = sets ?? [];
+
+  Map<String, dynamic> toJson() => {
+        'name': name,
+        'sets': sets.map((s) => s.toJson()).toList(),
+      };
+
+  factory ProgramExercise.fromJson(Map<String, dynamic> j) => ProgramExercise(
+        name: j['name'] as String,
+        sets: (j['sets'] as List<dynamic>? ?? [])
+            .map((e) => ProgramSet.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
+}
+
+class ProgramDay {
+  DateTime date;
+  List<ProgramExercise> exercises;
+
+  ProgramDay({required this.date, List<ProgramExercise>? exercises})
+      : exercises = exercises ?? [];
+
+  Map<String, dynamic> toJson() => {
+        'date': date.toIso8601String(),
+        'exercises': exercises.map((e) => e.toJson()).toList(),
+      };
+
+  factory ProgramDay.fromJson(Map<String, dynamic> j) => ProgramDay(
+        date: DateTime.parse(j['date'] as String),
+        exercises: (j['exercises'] as List<dynamic>? ?? [])
+            .map((e) => ProgramExercise.fromJson(e as Map<String, dynamic>))
+            .toList(),
       );
 }
 
@@ -1102,7 +1186,7 @@ class _HomeScreenState extends State<HomeScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 4, vsync: this);
+    _tabController = TabController(length: 5, vsync: this);
     _tabController.addListener(() => setState(() {}));
   }
 
@@ -1274,13 +1358,14 @@ class _HomeScreenState extends State<HomeScreen>
             Tab(text: 'Dashboard'),
             Tab(text: 'Lifts'),
             Tab(text: 'Workouts'),
+            Tab(text: 'Program'),
             Tab(text: 'Community'),
           ],
         ),
       ),
       body: TabBarView(
         controller: _tabController,
-        children: [_buildDashboardTab(), _buildLiftsTab(), _buildWorkoutsTab(), _buildCommunityTab()],
+        children: [_buildDashboardTab(), _buildLiftsTab(), _buildWorkoutsTab(), _buildProgramTab(), _buildCommunityTab()],
       ),
       floatingActionButton: isOwn && _tabController.index == 1
           ? FloatingActionButton.extended(
@@ -2113,6 +2198,13 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
+  Widget _buildProgramTab() {
+    return _ProgramTabView(
+      profile: widget.profile,
+      onChanged: widget.onChanged,
+    );
+  }
+
   Widget _buildCommunityTab() {
     return StreamBuilder<List<Profile>>(
       stream: LiftStore.stream(),
@@ -2725,12 +2817,12 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
 
 // ─── Workout Screen ───────────────────────────────────────────────────────────
 
-enum _SetStatus { none, missed, succeeded }
+enum SetStatus { none, missed, succeeded }
 
 class _SetRow {
   final TextEditingController reps;
   final TextEditingController weight;
-  _SetStatus status = _SetStatus.none;
+  SetStatus status = SetStatus.none;
   _SetRow({String reps = '5', String weight = ''})
       : reps = TextEditingController(text: reps),
         weight = TextEditingController(text: weight);
@@ -3240,22 +3332,22 @@ static const _otherOptions = ['Reps', 'Weight', 'Height', 'RPE'];
                     // Miss button
                     GestureDetector(
                       onTap: () => setState(() {
-                        row.status = row.status == _SetStatus.missed
-                            ? _SetStatus.none
-                            : _SetStatus.missed;
+                        row.status = row.status == SetStatus.missed
+                            ? SetStatus.none
+                            : SetStatus.missed;
                       }),
                       child: Container(
                         width: 34,
                         height: 34,
                         decoration: BoxDecoration(
-                          color: row.status == _SetStatus.missed
+                          color: row.status == SetStatus.missed
                               ? Colors.red
                               : Colors.white10,
                           borderRadius: BorderRadius.circular(6),
                         ),
                         child: Icon(Icons.close,
                             size: 18,
-                            color: row.status == _SetStatus.missed
+                            color: row.status == SetStatus.missed
                                 ? Colors.white
                                 : Colors.white38),
                       ),
@@ -3264,22 +3356,22 @@ static const _otherOptions = ['Reps', 'Weight', 'Height', 'RPE'];
                     // Success button
                     GestureDetector(
                       onTap: () => setState(() {
-                        row.status = row.status == _SetStatus.succeeded
-                            ? _SetStatus.none
-                            : _SetStatus.succeeded;
+                        row.status = row.status == SetStatus.succeeded
+                            ? SetStatus.none
+                            : SetStatus.succeeded;
                       }),
                       child: Container(
                         width: 34,
                         height: 34,
                         decoration: BoxDecoration(
-                          color: row.status == _SetStatus.succeeded
+                          color: row.status == SetStatus.succeeded
                               ? Colors.green
                               : Colors.white10,
                           borderRadius: BorderRadius.circular(6),
                         ),
                         child: Icon(Icons.check,
                             size: 18,
-                            color: row.status == _SetStatus.succeeded
+                            color: row.status == SetStatus.succeeded
                                 ? Colors.white
                                 : Colors.white38),
                       ),
@@ -3320,6 +3412,630 @@ static const _otherOptions = ['Reps', 'Weight', 'Height', 'RPE'];
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+// ─── Program Tab ─────────────────────────────────────────────────────────────
+
+class _ProgramTabView extends StatefulWidget {
+  final Profile profile;
+  final VoidCallback onChanged;
+  const _ProgramTabView({required this.profile, required this.onChanged});
+
+  @override
+  State<_ProgramTabView> createState() => _ProgramTabViewState();
+}
+
+class _ProgramTabViewState extends State<_ProgramTabView> {
+  late DateTime _weekStart;
+  late DateTime _selectedDay;
+
+  static const _dayLabels = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+  static const _dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  static const _months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+  @override
+  void initState() {
+    super.initState();
+    final today = _dateOnly(DateTime.now());
+    final daysFromSunday = today.weekday % 7; // Mon=1%7=1 … Sun=7%7=0
+    _weekStart = today.subtract(Duration(days: daysFromSunday));
+    _selectedDay = today;
+  }
+
+  DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+
+  bool _sameDay(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
+
+  ProgramDay? _dayData(DateTime date) {
+    try {
+      return widget.profile.program
+          .firstWhere((d) => _sameDay(d.date, date));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _addExercises() async {
+    final liftNames = widget.profile.lifts.map((l) => l.name).toList();
+    final selected = <String>{};
+    final customCtrl = TextEditingController();
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlg) => AlertDialog(
+          title: const Text('Add Exercises'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (liftNames.isNotEmpty) ...[
+                  SizedBox(
+                    height: 200,
+                    child: ListView(
+                      children: liftNames.map((name) => CheckboxListTile(
+                        title: Text(name),
+                        value: selected.contains(name),
+                        onChanged: (v) => setDlg(() {
+                          if (v == true) { selected.add(name); }
+                          else { selected.remove(name); }
+                        }),
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                      )).toList(),
+                    ),
+                  ),
+                  const Divider(),
+                ],
+                Row(children: [
+                  Expanded(
+                    child: TextField(
+                      controller: customCtrl,
+                      decoration: const InputDecoration(
+                        hintText: 'Custom exercise…',
+                        isDense: true,
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    icon: const Icon(Icons.add),
+                    onPressed: () {
+                      final t = customCtrl.text.trim();
+                      if (t.isNotEmpty) {
+                        setDlg(() => selected.add(t));
+                        customCtrl.clear();
+                      }
+                    },
+                  ),
+                ]),
+                if (selected.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 4,
+                    children: selected.map((s) => Chip(
+                      label: Text(s, style: const TextStyle(fontSize: 12)),
+                      onDeleted: () => setDlg(() => selected.remove(s)),
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    )).toList(),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+            FilledButton(
+              onPressed: selected.isEmpty ? null : () {
+                Navigator.pop(ctx);
+                _addExercisesToDay(selected.toList());
+              },
+              child: const Text('Add'),
+            ),
+          ],
+        ),
+      ),
+    );
+    customCtrl.dispose();
+  }
+
+  void _addExercisesToDay(List<String> names) {
+    setState(() {
+      var day = _dayData(_selectedDay);
+      if (day == null) {
+        day = ProgramDay(date: _selectedDay);
+        widget.profile.program.add(day);
+      }
+      for (final name in names) {
+        day.exercises.add(ProgramExercise(
+          name: name,
+          sets: [ProgramSet(), ProgramSet(), ProgramSet()],
+        ));
+      }
+    });
+    widget.onChanged();
+  }
+
+  void _confirmDeleteExercise(ProgramDay day, int index) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Remove exercise?'),
+        content: Text('Remove "${day.exercises[index].name}" from this day?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () {
+              Navigator.pop(context);
+              setState(() {
+                day.exercises.removeAt(index);
+                if (day.exercises.isEmpty) {
+                  widget.profile.program.remove(day);
+                }
+              });
+              widget.onChanged();
+            },
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _weekRangeLabel() {
+    final end = _weekStart.add(const Duration(days: 6));
+    if (_weekStart.month == end.month) {
+      return '${_months[_weekStart.month - 1]} ${_weekStart.day} – ${end.day}, ${end.year}';
+    }
+    return '${_months[_weekStart.month - 1]} ${_weekStart.day} – ${_months[end.month - 1]} ${end.day}, ${end.year}';
+  }
+
+  String _selectedDayLabel() {
+    final dow = _selectedDay.weekday % 7;
+    return '${_dayNames[dow]}, ${_months[_selectedDay.month - 1]} ${_selectedDay.day}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final dayData = _dayData(_selectedDay);
+    final exercises = dayData?.exercises ?? [];
+
+    return Column(
+      children: [
+        // ── Week navigation ──
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+          child: Row(children: [
+            IconButton(
+              icon: const Icon(Icons.chevron_left),
+              onPressed: () => setState(
+                  () => _weekStart = _weekStart.subtract(const Duration(days: 7))),
+            ),
+            Expanded(
+              child: Text(_weekRangeLabel(),
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+            ),
+            IconButton(
+              icon: const Icon(Icons.chevron_right),
+              onPressed: () => setState(
+                  () => _weekStart = _weekStart.add(const Duration(days: 7))),
+            ),
+          ]),
+        ),
+        // ── Day cells ──
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: List.generate(7, (i) {
+              final day = _weekStart.add(Duration(days: i));
+              final isSelected = _sameDay(day, _selectedDay);
+              final hasData = _dayData(day) != null &&
+                  _dayData(day)!.exercises.isNotEmpty;
+              final primary = Theme.of(context).colorScheme.primary;
+              return GestureDetector(
+                onTap: () => setState(() => _selectedDay = day),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Selected-day dot above
+                    Container(
+                      width: 5, height: 5,
+                      decoration: BoxDecoration(
+                        color: isSelected ? primary : Colors.transparent,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(_dayLabels[i],
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: isSelected ? primary : Colors.white54,
+                          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                        )),
+                    const SizedBox(height: 4),
+                    Container(
+                      width: 34, height: 34,
+                      decoration: BoxDecoration(
+                        color: isSelected ? primary : Colors.transparent,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Center(
+                        child: Text('${day.day}',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 14,
+                              color: isSelected ? Colors.white : Colors.white70,
+                            )),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    // Dot for days that have exercises
+                    Container(
+                      width: 4, height: 4,
+                      decoration: BoxDecoration(
+                        color: hasData && !isSelected ? primary : Colors.transparent,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }),
+          ),
+        ),
+        const SizedBox(height: 8),
+        const Divider(height: 1),
+        // ── Day label ──
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Text(_selectedDayLabel(),
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          ),
+        ),
+        // ── Exercise list ──
+        Expanded(
+          child: exercises.isEmpty
+              ? const Center(
+                  child: Text('No exercises programmed.\nLong-press an exercise to remove it.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.white54, fontSize: 13)))
+              : ListView.builder(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  itemCount: exercises.length,
+                  itemBuilder: (_, i) {
+                    final ex = exercises[i];
+                    final done = ex.sets.where((s) => s.status == SetStatus.succeeded).length;
+                    final missed = ex.sets.where((s) => s.status == SetStatus.missed).length;
+                    return Card(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      child: ListTile(
+                        title: Text(ex.name,
+                            style: const TextStyle(fontWeight: FontWeight.w600)),
+                        subtitle: Text(
+                          '${ex.sets.length} set${ex.sets.length == 1 ? '' : 's'}'
+                          '${done > 0 ? '  ✓$done' : ''}${missed > 0 ? '  ✗$missed' : ''}',
+                          style: const TextStyle(fontSize: 12, color: Colors.white54),
+                        ),
+                        trailing: const Icon(Icons.chevron_right, color: Colors.white54),
+                        onTap: () async {
+                          await Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => ProgramExerciseScreen(
+                                exercise: ex,
+                                onChanged: () {
+                                  setState(() {});
+                                  widget.onChanged();
+                                },
+                              ),
+                            ),
+                          );
+                        },
+                        onLongPress: () => _confirmDeleteExercise(dayData!, i),
+                      ),
+                    );
+                  },
+                ),
+        ),
+        // ── Add Program button ──
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              icon: const Icon(Icons.add),
+              label: const Text('Add Program'),
+              onPressed: _addExercises,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ─── Program Exercise Screen ──────────────────────────────────────────────────
+
+class _ProgSetRow {
+  final TextEditingController reps;
+  final TextEditingController weight;
+  final TextEditingController rpe;
+  SetStatus status;
+
+  _ProgSetRow({String reps = '5', String weight = '', String rpe = ''})
+      : reps = TextEditingController(text: reps),
+        weight = TextEditingController(text: weight),
+        rpe = TextEditingController(text: rpe),
+        status = SetStatus.none;
+
+  factory _ProgSetRow.fromProgramSet(ProgramSet s) {
+    final row = _ProgSetRow(
+      reps: s.reps.toString(),
+      weight: s.weight != null
+          ? (s.weight! % 1 == 0
+              ? s.weight!.toInt().toString()
+              : s.weight!.toStringAsFixed(1))
+          : '',
+      rpe: s.rpe != null ? s.rpe!.toStringAsFixed(1) : '',
+    );
+    row.status = s.status;
+    return row;
+  }
+
+  void dispose() {
+    reps.dispose();
+    weight.dispose();
+    rpe.dispose();
+  }
+}
+
+class ProgramExerciseScreen extends StatefulWidget {
+  final ProgramExercise exercise;
+  final VoidCallback onChanged;
+
+  const ProgramExerciseScreen(
+      {super.key, required this.exercise, required this.onChanged});
+
+  @override
+  State<ProgramExerciseScreen> createState() => _ProgramExerciseScreenState();
+}
+
+class _ProgramExerciseScreenState extends State<ProgramExerciseScreen> {
+  late final List<_ProgSetRow> _rows;
+  String _unit = 'lbs';
+
+  @override
+  void initState() {
+    super.initState();
+    _unit = widget.exercise.sets.isNotEmpty
+        ? widget.exercise.sets.first.unit
+        : 'lbs';
+    _rows = widget.exercise.sets
+        .map((s) => _ProgSetRow.fromProgramSet(s))
+        .toList();
+    if (_rows.isEmpty) {
+      _rows.addAll([_ProgSetRow(), _ProgSetRow(), _ProgSetRow()]);
+    }
+  }
+
+  @override
+  void dispose() {
+    for (final r in _rows) { r.dispose(); }
+    super.dispose();
+  }
+
+  void _save() {
+    widget.exercise.sets = _rows.map((r) => ProgramSet(
+          reps: int.tryParse(r.reps.text) ?? 5,
+          weight: double.tryParse(r.weight.text),
+          unit: _unit,
+          rpe: double.tryParse(r.rpe.text),
+          status: r.status,
+        )).toList();
+    widget.onChanged();
+    Navigator.pop(context);
+  }
+
+  Widget _statusBtn(int idx, SetStatus target, IconData icon, Color activeColor) {
+    final row = _rows[idx];
+    final active = row.status == target;
+    return GestureDetector(
+      onTap: () => setState(() {
+        row.status = active ? SetStatus.none : target;
+      }),
+      child: Container(
+        width: 34,
+        height: 34,
+        decoration: BoxDecoration(
+          color: active ? activeColor : Colors.white10,
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Icon(icon,
+            size: 18, color: active ? Colors.white : Colors.white38),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(widget.exercise.name,
+            style: const TextStyle(fontWeight: FontWeight.bold)),
+        centerTitle: true,
+        actions: [
+          TextButton(
+            onPressed: _save,
+            child: const Text('Save', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          // Unit selector
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+            child: Row(children: [
+              const Text('Unit:', style: TextStyle(color: Colors.white70)),
+              const SizedBox(width: 12),
+              SegmentedButton<String>(
+                segments: const [
+                  ButtonSegment(value: 'lbs', label: Text('lbs')),
+                  ButtonSegment(value: 'kg', label: Text('kg')),
+                ],
+                selected: {_unit},
+                onSelectionChanged: (s) =>
+                    setState(() => _unit = s.first),
+                style: const ButtonStyle(
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  visualDensity: VisualDensity.compact,
+                ),
+              ),
+            ]),
+          ),
+          // Column headers
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 12, 16, 4),
+            child: Row(children: [
+              SizedBox(width: 28,
+                  child: Text('Set', style: TextStyle(fontSize: 11, color: Colors.white38))),
+              SizedBox(width: 8),
+              SizedBox(width: 60,
+                  child: Text('Reps', style: TextStyle(fontSize: 11, color: Colors.white38))),
+              SizedBox(width: 8),
+              Expanded(
+                  child: Text('Weight', style: TextStyle(fontSize: 11, color: Colors.white38))),
+              SizedBox(width: 8),
+              SizedBox(width: 52,
+                  child: Text('RPE', style: TextStyle(fontSize: 11, color: Colors.white38),
+                      textAlign: TextAlign.center)),
+              SizedBox(width: 84),
+            ]),
+          ),
+          // Set rows
+          Expanded(
+            child: ListView.builder(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+              itemCount: _rows.length,
+              itemBuilder: (_, idx) {
+                final row = _rows[idx];
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      SizedBox(
+                        width: 28,
+                        child: Text('${idx + 1}',
+                            style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.bold,
+                                color: Theme.of(context).colorScheme.primary)),
+                      ),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        width: 60,
+                        child: TextField(
+                          controller: row.reps,
+                          keyboardType: TextInputType.number,
+                          textAlign: TextAlign.center,
+                          decoration: const InputDecoration(
+                            isDense: true,
+                            border: OutlineInputBorder(),
+                            contentPadding:
+                                EdgeInsets.symmetric(vertical: 8, horizontal: 6),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextField(
+                          controller: row.weight,
+                          keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true),
+                          textAlign: TextAlign.center,
+                          decoration: const InputDecoration(
+                            isDense: true,
+                            border: OutlineInputBorder(),
+                            contentPadding:
+                                EdgeInsets.symmetric(vertical: 8, horizontal: 6),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        width: 52,
+                        child: TextField(
+                          controller: row.rpe,
+                          keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true),
+                          textAlign: TextAlign.center,
+                          decoration: const InputDecoration(
+                            isDense: true,
+                            border: OutlineInputBorder(),
+                            contentPadding:
+                                EdgeInsets.symmetric(vertical: 8, horizontal: 6),
+                            hintText: '–',
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      _statusBtn(idx, SetStatus.missed, Icons.close, Colors.red),
+                      const SizedBox(width: 6),
+                      _statusBtn(idx, SetStatus.succeeded, Icons.check, Colors.green),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+          // Add / remove set
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.add_circle_outline, size: 22),
+                  tooltip: 'Add set',
+                  onPressed: () => setState(() {
+                    final prev = _rows.isNotEmpty ? _rows.last : null;
+                    _rows.add(_ProgSetRow(
+                      reps: prev?.reps.text ?? '5',
+                      weight: prev?.weight.text ?? '',
+                      rpe: prev?.rpe.text ?? '',
+                    ));
+                  }),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                  visualDensity: VisualDensity.compact,
+                ),
+                const SizedBox(width: 16),
+                IconButton(
+                  icon: const Icon(Icons.remove_circle_outline, size: 22),
+                  tooltip: 'Remove last set',
+                  onPressed: _rows.isEmpty
+                      ? null
+                      : () => setState(() => _rows.removeLast()..dispose()),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                  visualDensity: VisualDensity.compact,
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
