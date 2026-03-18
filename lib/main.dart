@@ -2123,6 +2123,7 @@ class _HomeScreenState extends State<HomeScreen>
       profile: widget.profile,
       onChanged: widget.onChanged,
       onAddWorkout: _logWorkout,
+      currentUserName: widget.currentUserName,
     );
   }
 
@@ -3344,7 +3345,13 @@ class _ProgramTabView extends StatefulWidget {
   final Profile profile;
   final VoidCallback onChanged;
   final VoidCallback onAddWorkout;
-  const _ProgramTabView({required this.profile, required this.onChanged, required this.onAddWorkout});
+  final String currentUserName;
+  const _ProgramTabView({
+    required this.profile,
+    required this.onChanged,
+    required this.onAddWorkout,
+    required this.currentUserName,
+  });
 
   @override
   State<_ProgramTabView> createState() => _ProgramTabViewState();
@@ -3484,32 +3491,6 @@ class _ProgramTabViewState extends State<_ProgramTabView> {
     widget.onChanged();
   }
 
-  void _confirmDeleteExercise(ProgramDay day, int index) {
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Remove exercise?'),
-        content: Text('Remove "${day.exercises[index].name}" from this day?'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
-            onPressed: () {
-              Navigator.pop(context);
-              setState(() {
-                day.exercises.removeAt(index);
-                if (day.exercises.isEmpty) {
-                  widget.profile.program.remove(day);
-                }
-              });
-              widget.onChanged();
-            },
-            child: const Text('Remove'),
-          ),
-        ],
-      ),
-    );
-  }
 
   String _weekRangeLabel() {
     final end = _weekStart.add(const Duration(days: 6));
@@ -3524,10 +3505,27 @@ class _ProgramTabViewState extends State<_ProgramTabView> {
     return '${_dayNames[dow]}, ${_months[_selectedDay.month - 1]} ${_selectedDay.day}';
   }
 
+  String _fmtDate(DateTime d) {
+    const m = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return '${m[d.month - 1]} ${d.day}, ${d.year}';
+  }
+
+  Widget _dismissBackground() => Container(
+    alignment: Alignment.centerRight,
+    padding: const EdgeInsets.only(right: 20),
+    decoration: BoxDecoration(
+      color: Colors.red,
+      borderRadius: BorderRadius.circular(12),
+    ),
+    child: const Icon(Icons.delete_outline, color: Colors.white),
+  );
+
   @override
   Widget build(BuildContext context) {
     final dayData = _dayData(_selectedDay);
     final exercises = dayData?.exercises ?? [];
+    final sortedWorkouts = [...widget.profile.workouts]
+      ..sort((a, b) => b.date.compareTo(a.date));
 
     return Column(
       children: [
@@ -3616,59 +3614,176 @@ class _ProgramTabViewState extends State<_ProgramTabView> {
         ),
         const SizedBox(height: 8),
         const Divider(height: 1),
-        // ── Day label ──
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: Text(_selectedDayLabel(),
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-          ),
-        ),
-        // ── Exercise list ──
+        // ── Scrollable content: programmed exercises + completed workouts ──
         Expanded(
-          child: exercises.isEmpty
-              ? const Center(
-                  child: Text('No exercises programmed.\nLong-press an exercise to remove it.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: Colors.white54, fontSize: 13)))
-              : ListView.builder(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  itemCount: exercises.length,
-                  itemBuilder: (_, i) {
-                    final ex = exercises[i];
-                    final done = ex.sets.where((s) => s.status == SetStatus.succeeded).length;
-                    final missed = ex.sets.where((s) => s.status == SetStatus.missed).length;
-                    return Card(
-                      margin: const EdgeInsets.only(bottom: 8),
-                      child: ListTile(
-                        title: Text(ex.name,
-                            style: const TextStyle(fontWeight: FontWeight.w600)),
-                        subtitle: Text(
-                          '${ex.sets.length} set${ex.sets.length == 1 ? '' : 's'}'
-                          '${done > 0 ? '  ✓$done' : ''}${missed > 0 ? '  ✗$missed' : ''}',
-                          style: const TextStyle(fontSize: 12, color: Colors.white54),
-                        ),
-                        trailing: const Icon(Icons.chevron_right, color: Colors.white54),
-                        onTap: () async {
-                          await Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => ProgramExerciseScreen(
-                                exercise: ex,
-                                onChanged: () {
-                                  setState(() {});
-                                  widget.onChanged();
-                                },
+          child: CustomScrollView(
+            slivers: [
+              // Day label
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+                  child: Text(_selectedDayLabel(),
+                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                ),
+              ),
+              // Programmed exercises
+              if (exercises.isEmpty)
+                const SliverToBoxAdapter(
+                  child: Padding(
+                    padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+                    child: Text('No exercises programmed for this day.',
+                        style: TextStyle(color: Colors.white54, fontSize: 13)),
+                  ),
+                )
+              else
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+                  sliver: SliverList(
+                    delegate: SliverChildBuilderDelegate(
+                      (_, i) {
+                        final ex = exercises[i];
+                        final done = ex.sets.where((s) => s.status == SetStatus.succeeded).length;
+                        final missed = ex.sets.where((s) => s.status == SetStatus.missed).length;
+                        return Dismissible(
+                          key: Key('prog_${_selectedDay.toIso8601String()}_$i'),
+                          direction: DismissDirection.endToStart,
+                          background: _dismissBackground(),
+                          onDismissed: (_) {
+                            setState(() {
+                              dayData!.exercises.removeAt(i);
+                              if (dayData.exercises.isEmpty) {
+                                widget.profile.program.remove(dayData);
+                              }
+                            });
+                            widget.onChanged();
+                          },
+                          child: Card(
+                            margin: const EdgeInsets.only(bottom: 8),
+                            child: ListTile(
+                              title: Text(ex.name,
+                                  style: const TextStyle(fontWeight: FontWeight.w600)),
+                              subtitle: Text(
+                                '${ex.sets.length} set${ex.sets.length == 1 ? '' : 's'}'
+                                '${done > 0 ? '  ✓$done' : ''}${missed > 0 ? '  ✗$missed' : ''}',
+                                style: const TextStyle(fontSize: 12, color: Colors.white54),
+                              ),
+                              trailing: const Icon(Icons.chevron_right, color: Colors.white54),
+                              onTap: () async {
+                                await Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => ProgramExerciseScreen(
+                                      exercise: ex,
+                                      onChanged: () {
+                                        setState(() {});
+                                        widget.onChanged();
+                                      },
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                        );
+                      },
+                      childCount: exercises.length,
+                    ),
+                  ),
+                ),
+              // Completed Workouts header
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                  child: Row(children: [
+                    Icon(Icons.fitness_center, size: 15,
+                        color: Theme.of(context).colorScheme.primary),
+                    const SizedBox(width: 6),
+                    const Text('Completed Workouts',
+                        style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                  ]),
+                ),
+              ),
+              // Completed workouts list
+              if (sortedWorkouts.isEmpty)
+                const SliverToBoxAdapter(
+                  child: Padding(
+                    padding: EdgeInsets.fromLTRB(16, 0, 16, 16),
+                    child: Text('No workouts logged yet.',
+                        style: TextStyle(color: Colors.white54, fontSize: 13)),
+                  ),
+                )
+              else
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                  sliver: SliverList(
+                    delegate: SliverChildBuilderDelegate(
+                      (_, i) {
+                        final workout = sortedWorkouts[i];
+                        final exNames = workout.exercises.map((e) => e.liftName).join(' · ');
+                        return Dismissible(
+                          key: Key('workout_${workout.date.toIso8601String()}'),
+                          direction: DismissDirection.endToStart,
+                          background: _dismissBackground(),
+                          onDismissed: (_) {
+                            setState(() => widget.profile.workouts.remove(workout));
+                            widget.onChanged();
+                          },
+                          child: Card(
+                            margin: const EdgeInsets.only(bottom: 8),
+                            child: ListTile(
+                              contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 16, vertical: 6),
+                              title: Row(children: [
+                                Text(_fmtDate(workout.date),
+                                    style: const TextStyle(
+                                        fontWeight: FontWeight.w600, fontSize: 15)),
+                                const SizedBox(width: 8),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: Theme.of(context).colorScheme.primaryContainer,
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: Text(workout.type.label,
+                                      style: TextStyle(
+                                          fontSize: 10,
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .onPrimaryContainer)),
+                                ),
+                              ]),
+                              subtitle: Text(
+                                  exNames.isEmpty ? 'No exercises' : exNames,
+                                  style: const TextStyle(
+                                      fontSize: 12, color: Colors.white60),
+                                  overflow: TextOverflow.ellipsis),
+                              trailing: const Icon(Icons.chevron_right),
+                              onTap: () => Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => WorkoutDetailScreen(
+                                    workout: workout,
+                                    profile: widget.profile,
+                                    currentUserName: widget.currentUserName,
+                                    isOwnProfile: true,
+                                    onChanged: () {
+                                      setState(() {});
+                                      widget.onChanged();
+                                    },
+                                  ),
+                                ),
                               ),
                             ),
-                          );
-                        },
-                        onLongPress: () => _confirmDeleteExercise(dayData!, i),
-                      ),
-                    );
-                  },
+                          ),
+                        );
+                      },
+                      childCount: sortedWorkouts.length,
+                    ),
+                  ),
                 ),
+            ],
+          ),
         ),
         // ── Action buttons ──
         Padding(
