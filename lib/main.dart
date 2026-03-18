@@ -240,6 +240,9 @@ class WorkoutExercise {
   String unit;
   String? otherType;    // 'Reps' | 'Weight' | 'Height' | 'RPE'
   String? otherValue;
+  // Preserves what was entered during config (for planned display)
+  String? plannedUnit;   // 'lbs', 'kg', or '%'
+  double? plannedWeight; // raw entered value (may be a % like 80)
 
   WorkoutExercise({
     required this.liftName,
@@ -249,6 +252,8 @@ class WorkoutExercise {
     this.unit = 'lbs',
     this.otherType,
     this.otherValue,
+    this.plannedUnit,
+    this.plannedWeight,
   }) : sets = sets ?? [];
 
   Map<String, dynamic> toJson() => {
@@ -259,6 +264,8 @@ class WorkoutExercise {
         'unit': unit,
         if (otherType != null) 'otherType': otherType,
         if (otherValue != null && otherValue!.isNotEmpty) 'otherValue': otherValue,
+        if (plannedUnit != null) 'plannedUnit': plannedUnit,
+        if (plannedWeight != null) 'plannedWeight': plannedWeight,
       };
 
   factory WorkoutExercise.fromJson(Map<String, dynamic> j) => WorkoutExercise(
@@ -271,6 +278,8 @@ class WorkoutExercise {
         unit: j['unit'] as String? ?? 'lbs',
         otherType: j['otherType'] as String?,
         otherValue: j['otherValue'] as String?,
+        plannedUnit: j['plannedUnit'] as String?,
+        plannedWeight: (j['plannedWeight'] as num?)?.toDouble(),
       );
 }
 
@@ -279,6 +288,8 @@ class Workout {
   WorkoutType type;
   int? timeCap; // minutes
   String? result;
+  String? notes;
+  bool completed; // false = planned template, true = logged/done
   List<WorkoutExercise> exercises;
   List<Comment> comments;
   Map<String, List<String>> reactions;
@@ -288,6 +299,8 @@ class Workout {
     this.type = WorkoutType.strength,
     this.timeCap,
     this.result,
+    this.notes,
+    this.completed = true,
     List<WorkoutExercise>? exercises,
     List<Comment>? comments,
     Map<String, List<String>>? reactions,
@@ -300,6 +313,8 @@ class Workout {
         'type': type.name,
         if (timeCap != null) 'timeCap': timeCap,
         if (result != null && result!.isNotEmpty) 'result': result,
+        if (notes != null && notes!.isNotEmpty) 'notes': notes,
+        if (!completed) 'completed': false,
         'exercises': exercises.map((e) => e.toJson()).toList(),
         'comments': comments.map((c) => c.toJson()).toList(),
         'reactions': reactions.map((k, v) => MapEntry(k, v)),
@@ -313,6 +328,8 @@ class Workout {
         ),
         timeCap: j['timeCap'] as int?,
         result: j['result'] as String?,
+        notes: j['notes'] as String?,
+        completed: j['completed'] as bool? ?? true,
         exercises: (j['exercises'] as List<dynamic>? ?? [])
             .map((e) => WorkoutExercise.fromJson(e as Map<String, dynamic>))
             .toList(),
@@ -1861,101 +1878,137 @@ class _HomeScreenState extends State<HomeScreen>
                   child: Card(
                     child: Padding(
                       padding: const EdgeInsets.all(16),
-                      child: Column(
+                      child: Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Row(
-                            children: [
-                              Icon(Icons.flag_outlined,
-                                  size: 16,
-                                  color:
-                                      Theme.of(context).colorScheme.primary),
-                              const SizedBox(width: 6),
-                              const Expanded(
-                                child: Text('Goals',
-                                    style: TextStyle(
-                                        fontSize: 12,
-                                        color: Colors.white54)),
-                              ),
-                              GestureDetector(
-                                onTap: _addGoal,
-                                child: Icon(Icons.add_circle_outline,
-                                    size: 18,
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .primary),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 8),
-                          // Workouts this week
-                          GestureDetector(
-                            onTap: _editWeeklyGoal,
-                            child: Row(
+                          // Left: goals list
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
                               children: [
-                                Icon(Icons.fitness_center,
-                                    size: 13,
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .primary),
-                                const SizedBox(width: 5),
-                                const Expanded(
-                                  child: Text('Workouts this week',
-                                      style: TextStyle(
-                                          fontSize: 12,
-                                          color: Colors.white60)),
-                                ),
-                                Text(
-                                  '${_workoutsThisWeek()}/${widget.profile.weeklyWorkoutGoal}',
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.bold,
-                                    color: _workoutsThisWeek() >=
-                                            widget.profile.weeklyWorkoutGoal
-                                        ? Colors.greenAccent
-                                        : Theme.of(context)
+                                Row(
+                                  children: [
+                                    Icon(Icons.flag_outlined,
+                                        size: 13,
+                                        color: Theme.of(context)
                                             .colorScheme
-                                            .primary,
-                                  ),
+                                            .primary),
+                                    const SizedBox(width: 4),
+                                    const Expanded(
+                                      child: Text('Goals',
+                                          style: TextStyle(
+                                              fontSize: 11,
+                                              color: Colors.white54)),
+                                    ),
+                                    GestureDetector(
+                                      onTap: _addGoal,
+                                      child: Icon(Icons.add_circle_outline,
+                                          size: 16,
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .primary),
+                                    ),
+                                  ],
                                 ),
-                                const SizedBox(width: 4),
-                                const Icon(Icons.edit,
-                                    size: 12, color: Colors.white30),
+                                const SizedBox(height: 6),
+                                if (widget.profile.goals.isEmpty)
+                                  const Text('Tap + to add',
+                                      style: TextStyle(
+                                          fontSize: 11,
+                                          color: Colors.white38))
+                                else
+                                  ...widget.profile.goals.asMap().entries.map(
+                                        (e) => Padding(
+                                          padding:
+                                              const EdgeInsets.only(bottom: 5),
+                                          child: Row(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              const Text('• ',
+                                                  style: TextStyle(
+                                                      fontSize: 12,
+                                                      color: Colors.white60)),
+                                              Expanded(
+                                                child: Text(e.value,
+                                                    style: const TextStyle(
+                                                        fontSize: 12,
+                                                        color: Colors.white70)),
+                                              ),
+                                              GestureDetector(
+                                                onTap: () =>
+                                                    _removeGoal(e.key),
+                                                child: const Icon(Icons.close,
+                                                    size: 12,
+                                                    color: Colors.white30),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
                               ],
                             ),
                           ),
-                          const SizedBox(height: 10),
-                          if (widget.profile.goals.isEmpty)
-                            const Text('No goals set.\nTap + to add one.',
-                                style: TextStyle(
-                                    fontSize: 13, color: Colors.white54))
-                          else
-                            ...widget.profile.goals.asMap().entries.map(
-                                  (e) => Padding(
-                                    padding: const EdgeInsets.only(bottom: 8),
-                                    child: Row(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        const Text('• ',
-                                            style: TextStyle(
-                                                color: Colors.white70)),
-                                        Expanded(
-                                          child: Text(e.value,
-                                              style: const TextStyle(
-                                                  fontSize: 13,
-                                                  color: Colors.white70)),
+                          const SizedBox(width: 12),
+                          // Divider
+                          Container(width: 1, height: 70, color: Colors.white12),
+                          const SizedBox(width: 12),
+                          // Right: workouts this week big display (centered)
+                          GestureDetector(
+                            onTap: _editWeeklyGoal,
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                RichText(
+                                  text: TextSpan(
+                                    children: [
+                                      TextSpan(
+                                        text: '${_workoutsThisWeek()}',
+                                        style: TextStyle(
+                                          fontSize: 42,
+                                          fontWeight: FontWeight.bold,
+                                          color: _workoutsThisWeek() >=
+                                                  widget.profile.weeklyWorkoutGoal
+                                              ? Colors.greenAccent
+                                              : Theme.of(context)
+                                                  .colorScheme
+                                                  .primary,
+                                          height: 1,
                                         ),
-                                        GestureDetector(
-                                          onTap: () => _removeGoal(e.key),
-                                          child: const Icon(Icons.close,
-                                              size: 14,
-                                              color: Colors.white38),
+                                      ),
+                                      TextSpan(
+                                        text: '/${widget.profile.weeklyWorkoutGoal}',
+                                        style: const TextStyle(
+                                          fontSize: 20,
+                                          fontWeight: FontWeight.w500,
+                                          color: Colors.white38,
+                                          height: 1,
                                         ),
-                                      ],
-                                    ),
+                                      ),
+                                    ],
                                   ),
                                 ),
+                                const SizedBox(height: 4),
+                                Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Icon(Icons.fitness_center,
+                                        size: 11, color: Colors.white38),
+                                    const SizedBox(width: 3),
+                                    const Text('this week',
+                                        style: TextStyle(
+                                            fontSize: 11,
+                                            color: Colors.white38)),
+                                    const SizedBox(width: 3),
+                                    const Icon(Icons.edit,
+                                        size: 10, color: Colors.white24),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
                         ],
                       ),
                     ),
@@ -2828,32 +2881,57 @@ enum SetStatus { none, missed, succeeded }
 class _SetRow {
   final TextEditingController reps;
   final TextEditingController weight;
+  final TextEditingController otherValue;
   SetStatus status = SetStatus.none;
-  _SetRow({String reps = '5', String weight = ''})
+  _SetRow({String reps = '5', String weight = '', String otherValue = ''})
       : reps = TextEditingController(text: reps),
-        weight = TextEditingController(text: weight);
+        weight = TextEditingController(text: weight),
+        otherValue = TextEditingController(text: otherValue);
   void dispose() {
     reps.dispose();
     weight.dispose();
+    otherValue.dispose();
   }
 }
 
 class WorkoutScreen extends StatefulWidget {
   final Profile profile;
   final VoidCallback onSaved;
+  final Workout? editingWorkout; // if set, editing existing workout
 
   const WorkoutScreen(
-      {super.key, required this.profile, required this.onSaved});
+      {super.key, required this.profile, required this.onSaved, this.editingWorkout});
 
   @override
   State<WorkoutScreen> createState() => _WorkoutScreenState();
 }
 
 class _WorkoutScreenState extends State<WorkoutScreen> {
-  DateTime _date = DateTime.now();
-  WorkoutType _type = WorkoutType.strength;
-  final _timeCtrl = TextEditingController();
-  final _resultCtrl = TextEditingController();
+  late DateTime _date;
+  late WorkoutType _type;
+  late final _timeCtrl = TextEditingController(
+      text: widget.editingWorkout?.timeCap?.toString() ?? '');
+  late final _resultCtrl = TextEditingController(
+      text: widget.editingWorkout?.result ?? '');
+  // AMRAP split result: "X rounds + Y reps"
+  late final _amrapRoundsCtrl = TextEditingController(
+      text: _parseAmrapRounds(widget.editingWorkout?.result));
+  late final _amrapRepsCtrl = TextEditingController(
+      text: _parseAmrapReps(widget.editingWorkout?.result));
+  late final _completionNotesCtrl = TextEditingController(
+      text: widget.editingWorkout?.notes ?? '');
+
+  static String _parseAmrapRounds(String? result) {
+    if (result == null) return '';
+    final m = RegExp(r'^(\d+)').firstMatch(result);
+    return m?.group(1) ?? '';
+  }
+
+  static String _parseAmrapReps(String? result) {
+    if (result == null) return '';
+    final m = RegExp(r'\+\s*(\d+)').firstMatch(result);
+    return m?.group(1) ?? '';
+  }
   final List<WorkoutExercise> _exercises = [];
   final Map<String, TextEditingController> _repsCtrl = {};
   final Map<String, TextEditingController> _weightCtrl = {};
@@ -2862,12 +2940,70 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
   final Map<String, FixedExtentScrollController> _otherScrollCtrl = {};
   final Map<String, TextEditingController> _otherValueCtrl = {};
   final Map<String, int> _otherSelIdx = {};
-static const _otherOptions = ['Reps', 'Weight', 'Height', 'RPE'];
+  // Strength config phase
+  final Set<String> _confirmed = {};
+  final Map<String, TextEditingController> _setsCountCtrl = {};
+  static const _otherOptions = ['RPE', 'Height'];
+
+  @override
+  void initState() {
+    super.initState();
+    final ew = widget.editingWorkout;
+    _date = ew?.date ?? DateTime.now();
+    _type = ew?.type ?? WorkoutType.strength;
+    if (ew != null) {
+      for (final ex in ew.exercises) {
+        _exercises.add(WorkoutExercise(
+          liftName: ex.liftName,
+          reps: ex.reps,
+          weight: ex.weight,
+          unit: ex.unit,
+          sets: List.from(ex.sets),
+          otherType: ex.otherType,
+          otherValue: ex.otherValue,
+          plannedUnit: ex.plannedUnit,
+          plannedWeight: ex.plannedWeight,
+        ));
+        final name = ex.liftName;
+        _repsCtrl[name] = TextEditingController(text: ex.reps.toString());
+        _weightCtrl[name] =
+            TextEditingController(text: ex.weight?.toString() ?? '');
+        _unitSel[name] = ex.unit;
+        _otherScrollCtrl[name] = FixedExtentScrollController();
+        _otherValueCtrl[name] =
+            TextEditingController(text: ex.otherValue ?? '');
+        _otherSelIdx[name] =
+            _otherOptions.indexOf(ex.otherType ?? 'RPE').clamp(0, _otherOptions.length - 1);
+        _setsCountCtrl[name] = TextEditingController(
+            text: ex.sets.isNotEmpty ? ex.sets.length.toString() : '3');
+        if (_type == WorkoutType.strength) {
+          _setCtrl[name] = ex.sets.isEmpty
+              ? [_SetRow(), _SetRow(), _SetRow()]
+              : ex.sets
+                  .map((s) => _SetRow(
+                      reps: s.reps.toString(),
+                      weight: s.weight == 0
+                          ? ''
+                          : s.weight % 1 == 0
+                              ? s.weight.toInt().toString()
+                              : s.weight.toStringAsFixed(1)))
+                  .toList();
+          // Always enter execution phase when editing any existing workout
+          _confirmed.add(name);
+        } else {
+          _setCtrl[name] = [];
+        }
+      }
+    }
+  }
 
   @override
   void dispose() {
     _timeCtrl.dispose();
     _resultCtrl.dispose();
+    _amrapRoundsCtrl.dispose();
+    _amrapRepsCtrl.dispose();
+    _completionNotesCtrl.dispose();
     for (final c in _repsCtrl.values) { c.dispose(); }
     for (final c in _weightCtrl.values) { c.dispose(); }
     for (final rows in _setCtrl.values) {
@@ -2875,6 +3011,7 @@ static const _otherOptions = ['Reps', 'Weight', 'Height', 'RPE'];
     }
     for (final c in _otherScrollCtrl.values) { c.dispose(); }
     for (final c in _otherValueCtrl.values) { c.dispose(); }
+    for (final c in _setsCountCtrl.values) { c.dispose(); }
     super.dispose();
   }
 
@@ -2900,13 +3037,14 @@ static const _otherOptions = ['Reps', 'Weight', 'Height', 'RPE'];
     if (_exercises.any((e) => e.liftName == name)) return;
     setState(() {
       _exercises.add(WorkoutExercise(liftName: name));
-      _repsCtrl[name] = TextEditingController(text: '10');
+      _repsCtrl[name] = TextEditingController(text: '5');
       _weightCtrl[name] = TextEditingController();
       _unitSel[name] = 'lbs';
       _otherScrollCtrl[name] = FixedExtentScrollController();
       _otherValueCtrl[name] = TextEditingController();
       _otherSelIdx[name] = 0;
-      _setCtrl[name] = [_SetRow(), _SetRow(), _SetRow()];
+      _setsCountCtrl[name] = TextEditingController(text: '3');
+      _setCtrl[name] = []; // empty until confirmed
     });
   }
 
@@ -2914,13 +3052,30 @@ static const _otherOptions = ['Reps', 'Weight', 'Height', 'RPE'];
     final name = _exercises[i].liftName;
     setState(() {
       _exercises.removeAt(i);
+      _confirmed.remove(name);
       _repsCtrl.remove(name)?.dispose();
       _weightCtrl.remove(name)?.dispose();
       _unitSel.remove(name);
       _otherScrollCtrl.remove(name)?.dispose();
       _otherValueCtrl.remove(name)?.dispose();
       _otherSelIdx.remove(name);
+      _setsCountCtrl.remove(name)?.dispose();
       for (final r in _setCtrl.remove(name) ?? []) { r.dispose(); }
+    });
+  }
+
+  void _confirmSets(String name) {
+    final count = int.tryParse(_setsCountCtrl[name]?.text.trim() ?? '') ?? 3;
+    final defaultReps = _repsCtrl[name]?.text.trim() ?? '5';
+    final defaultWeight = _weightCtrl[name]?.text.trim() ?? '';
+    final defaultOther = _otherValueCtrl[name]?.text.trim() ?? '';
+    setState(() {
+      for (final r in _setCtrl[name] ?? []) { r.dispose(); }
+      _setCtrl[name] = List.generate(
+        count.clamp(1, 20),
+        (_) => _SetRow(reps: defaultReps, weight: defaultWeight, otherValue: defaultOther),
+      );
+      _confirmed.add(name);
     });
   }
 
@@ -2945,21 +3100,46 @@ static const _otherOptions = ['Reps', 'Weight', 'Height', 'RPE'];
   }
 
   void _save() {
+    // Determine if any exercise is in execution (confirmed) phase
+    final anyConfirmed = _exercises.any((ex) => _confirmed.contains(ex.liftName));
+    final isCompleted = _type != WorkoutType.strength || anyConfirmed;
+
     for (final ex in _exercises) {
       if (_type == WorkoutType.strength) {
-        final unit = _unitSel[ex.liftName] ?? 'lbs';
-        ex.sets = (_setCtrl[ex.liftName] ?? [])
-            .where((r) => r.weight.text.trim().isNotEmpty)
-            .map((r) => WorkoutSet(
+        final name = ex.liftName;
+        final unit = _unitSel[name] ?? 'lbs';
+        final isPercent = unit == '%';
+        final oneRM = isPercent ? _oneRM(name) : null;
+
+        if (_confirmed.contains(name)) {
+          // Execution phase — use per-set rows
+          ex.sets = (_setCtrl[name] ?? [])
+              .map((r) {
+                final raw = double.tryParse(r.weight.text.trim()) ?? 0;
+                final actualWeight = isPercent && oneRM != null ? raw / 100 * oneRM : raw;
+                return WorkoutSet(
                   reps: int.tryParse(r.reps.text.trim()) ?? 5,
-                  weight: double.tryParse(r.weight.text.trim()) ?? 0,
-                  unit: unit,
-                ))
-            .toList();
+                  weight: actualWeight,
+                  unit: isPercent ? 'lbs' : unit,
+                );
+              })
+              .toList();
+        } else {
+          // Config phase — generate planned sets from config inputs
+          final count = int.tryParse(_setsCountCtrl[name]?.text.trim() ?? '') ?? 3;
+          final reps = int.tryParse(_repsCtrl[name]?.text.trim() ?? '') ?? 5;
+          final raw = double.tryParse(_weightCtrl[name]?.text.trim() ?? '') ?? 0;
+          final actualWeight = isPercent && oneRM != null ? raw / 100 * oneRM : raw;
+          ex.plannedUnit = unit;   // preserve original unit ('%', 'lbs', 'kg')
+          ex.plannedWeight = raw;  // preserve raw entered value (e.g. 80 for 80%)
+          ex.sets = List.generate(
+            count.clamp(1, 20),
+            (_) => WorkoutSet(reps: reps, weight: actualWeight, unit: isPercent ? 'lbs' : unit),
+          );
+        }
       } else {
         ex.reps = int.tryParse(_repsCtrl[ex.liftName]?.text ?? '') ?? ex.reps;
-        ex.weight =
-            double.tryParse(_weightCtrl[ex.liftName]?.text.trim() ?? '');
+        ex.weight = double.tryParse(_weightCtrl[ex.liftName]?.text.trim() ?? '');
         ex.unit = _unitSel[ex.liftName] ?? 'lbs';
         final otherIdx = _otherSelIdx[ex.liftName] ?? 0;
         final otherVal = _otherValueCtrl[ex.liftName]?.text.trim() ?? '';
@@ -2967,15 +3147,87 @@ static const _otherOptions = ['Reps', 'Weight', 'Height', 'RPE'];
         ex.otherValue = otherVal.isEmpty ? null : otherVal;
       }
     }
-    widget.profile.workouts.add(Workout(
-      date: _date,
-      type: _type,
-      timeCap: int.tryParse(_timeCtrl.text.trim()),
-      result: _resultCtrl.text.trim().isEmpty ? null : _resultCtrl.text.trim(),
-      exercises: _exercises,
-    ));
+
+    final timeCap = int.tryParse(_timeCtrl.text.trim());
+    String? result;
+    if (_type == WorkoutType.amrap) {
+      final rounds = _amrapRoundsCtrl.text.trim();
+      final reps = _amrapRepsCtrl.text.trim();
+      if (rounds.isNotEmpty || reps.isNotEmpty) {
+        result = reps.isNotEmpty ? '$rounds rounds + $reps reps' : '$rounds rounds';
+      }
+    } else {
+      result = _resultCtrl.text.trim().isEmpty ? null : _resultCtrl.text.trim();
+    }
+
+    final notesText = _completionNotesCtrl.text.trim().isEmpty
+        ? null
+        : _completionNotesCtrl.text.trim();
+    final ew = widget.editingWorkout;
+    if (ew != null) {
+      ew.date = _date;
+      ew.type = _type;
+      ew.timeCap = timeCap;
+      ew.result = result;
+      ew.notes = notesText;
+      ew.exercises = _exercises;
+      ew.completed = isCompleted;
+    } else {
+      widget.profile.workouts.add(Workout(
+        date: _date,
+        type: _type,
+        timeCap: timeCap,
+        result: result,
+        notes: notesText,
+        completed: isCompleted,
+        exercises: _exercises,
+      ));
+    }
     widget.onSaved();
     Navigator.pop(context);
+  }
+
+  double? _oneRM(String liftName) {
+    try {
+      final lift =
+          widget.profile.lifts.firstWhere((l) => l.name == liftName);
+      return lift.bests[1]?.weight;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Widget _buildAppBarTitle() {
+    final isPlannedStrength = widget.editingWorkout != null &&
+        !widget.editingWorkout!.completed &&
+        _type == WorkoutType.strength;
+    if (!isPlannedStrength || _exercises.isEmpty) {
+      return Text(
+        widget.editingWorkout != null ? 'Edit Workout' : 'New Workout',
+        style: const TextStyle(fontWeight: FontWeight.bold),
+      );
+    }
+    // Build summary lines per exercise
+    final lines = _exercises.map((ex) {
+      final rows = _setCtrl[ex.liftName] ?? [];
+      final sets = rows.length;
+      final reps = rows.isNotEmpty ? rows.first.reps.text.trim() : '—';
+      final pu = ex.plannedUnit ?? _unitSel[ex.liftName] ?? 'lbs';
+      final pw = ex.plannedWeight;
+      String weightStr;
+      if (pw != null && pw != 0) {
+        weightStr = pu == '%'
+            ? '${pw % 1 == 0 ? pw.toInt() : pw}%'
+            : '${pw % 1 == 0 ? pw.toInt() : pw} $pu';
+      } else {
+        final w = rows.isNotEmpty ? rows.first.weight.text.trim() : '';
+        weightStr = w.isEmpty ? 'BW' : '$w ${_unitSel[ex.liftName] ?? 'lbs'}';
+      }
+      return '$sets sets × $reps reps @ $weightStr';
+    }).join('\n');
+    return Text(lines,
+        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 20),
+        textAlign: TextAlign.center);
   }
 
   String get _timeLabel => switch (_type) {
@@ -2987,18 +3239,22 @@ static const _otherOptions = ['Reps', 'Weight', 'Height', 'RPE'];
 
   @override
   Widget build(BuildContext context) {
+    final isPlannedStrength = widget.editingWorkout != null &&
+        !widget.editingWorkout!.completed &&
+        _type == WorkoutType.strength;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('New Workout',
-            style: TextStyle(fontWeight: FontWeight.bold)),
+        title: _buildAppBarTitle(),
         centerTitle: true,
-        actions: [
-          TextButton(
-            onPressed: _exercises.isNotEmpty ? _save : null,
-            child: const Text('Save', style: TextStyle(fontSize: 16)),
-          ),
-          const SizedBox(width: 8),
-        ],
+        actions: isPlannedStrength
+            ? []
+            : [
+                TextButton(
+                  onPressed: _exercises.isNotEmpty ? _save : null,
+                  child: const Text('Save', style: TextStyle(fontSize: 16)),
+                ),
+                const SizedBox(width: 8),
+              ],
       ),
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -3013,23 +3269,31 @@ static const _otherOptions = ['Reps', 'Weight', 'Height', 'RPE'];
               style: OutlinedButton.styleFrom(alignment: Alignment.centerLeft),
             ),
           ),
-          // Workout type chips
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                children: WorkoutType.values.map((t) => Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: ChoiceChip(
-                    label: Text(t.label),
-                    selected: _type == t,
-                    onSelected: (_) => setState(() => _type = t),
-                  ),
-                )).toList(),
+          // Workout type dropdown (hidden for planned strength — shown in AppBar)
+          if (!(widget.editingWorkout != null &&
+              !widget.editingWorkout!.completed &&
+              _type == WorkoutType.strength))
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+              child: DropdownButtonFormField<WorkoutType>(
+                initialValue: _type,
+                decoration: const InputDecoration(
+                  labelText: 'Type',
+                  border: OutlineInputBorder(),
+                  contentPadding:
+                      EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                ),
+                items: WorkoutType.values
+                    .map((t) => DropdownMenuItem(
+                          value: t,
+                          child: Text(t.label),
+                        ))
+                    .toList(),
+                onChanged: (t) {
+                  if (t != null) setState(() => _type = t);
+                },
               ),
             ),
-          ),
           // Time field (functional workouts only)
           if (_type != WorkoutType.strength)
             Padding(
@@ -3041,29 +3305,6 @@ static const _otherOptions = ['Reps', 'Weight', 'Height', 'RPE'];
                   labelText: _timeLabel,
                   border: const OutlineInputBorder(),
                   suffixText: 'min',
-                ),
-              ),
-            ),
-          // Result field (functional workouts)
-          if (_type != WorkoutType.strength)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
-              child: TextField(
-                controller: _resultCtrl,
-                decoration: InputDecoration(
-                  labelText: switch (_type) {
-                    WorkoutType.amrap => 'Rounds Completed',
-                    WorkoutType.emom => 'Completed?',
-                    WorkoutType.forTime => 'Completion Time',
-                    _ => 'Result',
-                  },
-                  hintText: switch (_type) {
-                    WorkoutType.amrap => 'e.g. 5 rounds + 3 reps',
-                    WorkoutType.emom => 'e.g. Yes / 8 of 10 rounds',
-                    WorkoutType.forTime => 'e.g. 12:34',
-                    _ => '',
-                  },
-                  border: const OutlineInputBorder(),
                 ),
               ),
             ),
@@ -3086,6 +3327,81 @@ static const _otherOptions = ['Reps', 'Weight', 'Height', 'RPE'];
                         : _buildFunctionalCard(_exercises[i], i),
                   ),
           ),
+          // Result field (functional workouts) — below exercises
+          if (_type == WorkoutType.amrap)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _amrapRoundsCtrl,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: 'Rounds',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextField(
+                      controller: _amrapRepsCtrl,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: 'Reps',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            )
+          else if (_type != WorkoutType.strength)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+              child: TextField(
+                controller: _resultCtrl,
+                decoration: InputDecoration(
+                  labelText: switch (_type) {
+                    WorkoutType.emom => 'Completed?',
+                    WorkoutType.forTime => 'Completion Time',
+                    _ => 'Result',
+                  },
+                  hintText: switch (_type) {
+                    WorkoutType.emom => 'e.g. Yes / 8 of 10 rounds',
+                    WorkoutType.forTime => 'e.g. 12:34',
+                    _ => '',
+                  },
+                  border: const OutlineInputBorder(),
+                ),
+              ),
+            ),
+          // Comments + Complete button for planned strength execution
+          if (isPlannedStrength) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+              child: TextField(
+                controller: _completionNotesCtrl,
+                minLines: 2,
+                maxLines: 5,
+                decoration: const InputDecoration(
+                  labelText: 'Comments',
+                  hintText: 'Notes about this session...',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+              child: Center(
+                child: FilledButton(
+                  onPressed: _exercises.isNotEmpty ? _save : null,
+                  child: const Text('Complete', style: TextStyle(fontSize: 16)),
+                ),
+              ),
+            ),
+          ],
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
@@ -3097,6 +3413,9 @@ static const _otherOptions = ['Reps', 'Weight', 'Height', 'RPE'];
   }
 
   Widget _buildFunctionalCard(WorkoutExercise ex, int i) {
+    final name = ex.liftName;
+    final selIdx = (_otherSelIdx[name] ?? 0).clamp(0, _otherOptions.length - 1);
+    const labelStyle = TextStyle(fontSize: 12, color: Colors.white54);
     return Card(
       margin: EdgeInsets.zero,
       child: Padding(
@@ -3104,11 +3423,13 @@ static const _otherOptions = ['Reps', 'Weight', 'Height', 'RPE'];
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Exercise name + remove
             Row(children: [
               Expanded(
-                  child: Text(ex.liftName,
-                      style: const TextStyle(
-                          fontSize: 17, fontWeight: FontWeight.bold))),
+                child: Text(name,
+                    style: const TextStyle(
+                        fontSize: 17, fontWeight: FontWeight.bold)),
+              ),
               IconButton(
                 icon: const Icon(Icons.close, size: 20),
                 onPressed: () => _removeExercise(i),
@@ -3117,103 +3438,114 @@ static const _otherOptions = ['Reps', 'Weight', 'Height', 'RPE'];
               ),
             ]),
             const SizedBox(height: 12),
+            // Column header row
             Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                SizedBox(
-                  width: 80,
-                  child: TextField(
-                    controller: _repsCtrl[ex.liftName],
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(
-                        labelText: 'Reps', border: OutlineInputBorder()),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: TextField(
-                    controller: _weightCtrl[ex.liftName],
-                    keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true),
-                    decoration: const InputDecoration(
-                        labelText: 'Weight', border: OutlineInputBorder()),
-                  ),
-                ),
+                const SizedBox(
+                    width: 72, child: Text('Reps', style: labelStyle)),
+                const SizedBox(width: 10),
+                const Expanded(child: Text('Weight', style: labelStyle)),
                 const SizedBox(width: 8),
-                SegmentedButton<String>(
-                  segments: const [
-                    ButtonSegment(value: 'lbs', label: Text('lbs')),
-                    ButtonSegment(value: 'kg', label: Text('kg')),
-                  ],
-                  selected: {_unitSel[ex.liftName] ?? 'lbs'},
-                  onSelectionChanged: (s) =>
-                      setState(() => _unitSel[ex.liftName] = s.first),
+                // "Other" header with dropdown
+                SizedBox(
+                  width: 110,
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<int>(
+                      value: selIdx,
+                      isDense: true,
+                      items: List.generate(
+                        _otherOptions.length,
+                        (idx) => DropdownMenuItem(
+                          value: idx,
+                          child: Text(_otherOptions[idx],
+                              style: const TextStyle(
+                                  fontSize: 12, color: Colors.white70)),
+                        ),
+                      ),
+                      onChanged: (v) {
+                        if (v != null) {
+                          setState(() => _otherSelIdx[name] = v);
+                        }
+                      },
+                    ),
+                  ),
                 ),
               ],
             ),
-            const SizedBox(height: 12),
-            const Text('Other',
-                style: TextStyle(color: Colors.white60, fontSize: 13)),
-            const SizedBox(height: 8),
+            const SizedBox(height: 6),
+            // Input row
             Row(
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                // Scroll wheel
-                Container(
-                  height: 100,
-                  width: 100,
-                  decoration: BoxDecoration(
-                    border: Border.all(color: Colors.white24),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Stack(
-                    alignment: Alignment.center,
-                    children: [
-                      ListWheelScrollView(
-                        controller: _otherScrollCtrl[ex.liftName],
-                        itemExtent: 32,
-                        physics: const FixedExtentScrollPhysics(),
-                        onSelectedItemChanged: (idx) => setState(() => _otherSelIdx[ex.liftName] = idx),
-                        children: _otherOptions
-                            .map((o) => Center(
-                                  child: Text(o,
-                                      style:
-                                          const TextStyle(fontSize: 14)),
-                                ))
-                            .toList(),
-                      ),
-                      // Selection highlight
-                      IgnorePointer(
-                        child: Container(
-                          height: 32,
-                          decoration: BoxDecoration(
-                            border: Border(
-                              top: BorderSide(
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .primary,
-                                  width: 1.5),
-                              bottom: BorderSide(
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .primary,
-                                  width: 1.5),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
+                SizedBox(
+                  width: 72,
+                  child: TextField(
+                    controller: _repsCtrl[name],
+                    keyboardType: TextInputType.number,
+                    textAlign: TextAlign.center,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      contentPadding:
+                          EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                    ),
                   ),
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: 10),
                 Expanded(
                   child: TextField(
-                    controller: _otherValueCtrl[ex.liftName],
-                    keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true),
+                    controller: _weightCtrl[name],
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    textAlign: TextAlign.center,
                     decoration: InputDecoration(
-                      labelText: _otherOptions[_otherSelIdx[ex.liftName] ?? 0],
                       border: const OutlineInputBorder(),
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 10),
+                      suffixText: _unitSel[name] ?? 'lbs',
+                      suffixStyle: const TextStyle(
+                          fontSize: 11, color: Colors.white38),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 4),
+                // lbs / kg toggle
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: ['lbs', 'kg'].map((u) {
+                    final sel = (_unitSel[name] ?? 'lbs') == u;
+                    return GestureDetector(
+                      onTap: () => setState(() => _unitSel[name] = u),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: sel
+                              ? Theme.of(context).colorScheme.primary
+                              : Colors.transparent,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(u,
+                            style: TextStyle(
+                                fontSize: 11,
+                                color: sel ? Colors.black : Colors.white38)),
+                      ),
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(width: 8),
+                // Other value box
+                SizedBox(
+                  width: 94,
+                  child: TextField(
+                    controller: _otherValueCtrl[name],
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    textAlign: TextAlign.center,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      contentPadding:
+                          EdgeInsets.symmetric(horizontal: 8, vertical: 10),
                     ),
                   ),
                 ),
@@ -3226,8 +3558,15 @@ static const _otherOptions = ['Reps', 'Weight', 'Height', 'RPE'];
   }
 
   Widget _buildStrengthCard(WorkoutExercise ex, int i) {
-    final rows = _setCtrl[ex.liftName] ?? [];
-    final unit = _unitSel[ex.liftName] ?? 'lbs';
+    final name = ex.liftName;
+    final rows = _setCtrl[name] ?? [];
+    final unit = _unitSel[name] ?? 'lbs';
+    final isPercent = unit == '%';
+    final oneRM = isPercent ? _oneRM(name) : null;
+    final otherIdx = (_otherSelIdx[name] ?? 0).clamp(0, _otherOptions.length - 1);
+    final isConfirmed = _confirmed.contains(name);
+    const labelStyle = TextStyle(fontSize: 11, color: Colors.white54);
+
     return Card(
       margin: EdgeInsets.zero,
       child: Padding(
@@ -3235,187 +3574,289 @@ static const _otherOptions = ['Reps', 'Weight', 'Height', 'RPE'];
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header: name + unit toggle + close
+            // Header: name + close
             Row(children: [
               Expanded(
-                child: Text(ex.liftName,
-                    style: const TextStyle(
-                        fontSize: 17, fontWeight: FontWeight.bold)),
+                child: Text(name,
+                    style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
               ),
-              SegmentedButton<String>(
-                segments: const [
-                  ButtonSegment(value: 'lbs', label: Text('lbs')),
-                  ButtonSegment(value: 'kg', label: Text('kg')),
-                ],
-                selected: {unit},
-                onSelectionChanged: (s) =>
-                    setState(() => _unitSel[ex.liftName] = s.first),
-                style: ButtonStyle(
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  visualDensity: VisualDensity.compact,
-                ),
-              ),
-              const SizedBox(width: 8),
               GestureDetector(
                 onTap: () => _removeExercise(i),
-                child: const Icon(Icons.close,
-                    size: 20, color: Colors.white54),
+                child: const Icon(Icons.close, size: 20, color: Colors.white54),
               ),
             ]),
-            const SizedBox(height: 10),
-            // Column headers
-            const Row(children: [
-              SizedBox(
-                  width: 28,
-                  child: Text('Set',
-                      style:
-                          TextStyle(fontSize: 11, color: Colors.white38))),
-              SizedBox(width: 8),
-              SizedBox(
-                  width: 64,
-                  child: Text('Reps',
-                      style:
-                          TextStyle(fontSize: 11, color: Colors.white38))),
-              SizedBox(width: 8),
-              Expanded(
-                  child: Text('Weight',
-                      style:
-                          TextStyle(fontSize: 11, color: Colors.white38))),
-              SizedBox(width: 84), // space for status buttons
-            ]),
-            const SizedBox(height: 6),
-            // Set rows
-            ...rows.asMap().entries.map((e) {
-              final idx = e.key;
-              final row = e.value;
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    SizedBox(
-                      width: 28,
-                      child: Text('${idx + 1}',
-                          style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.bold,
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .primary)),
-                    ),
-                    const SizedBox(width: 8),
-                    SizedBox(
-                      width: 64,
-                      child: TextField(
-                        controller: row.reps,
-                        keyboardType: TextInputType.number,
-                        textAlign: TextAlign.center,
-                        decoration: const InputDecoration(
-                          isDense: true,
-                          border: OutlineInputBorder(),
-                          contentPadding: EdgeInsets.symmetric(
-                              vertical: 8, horizontal: 6),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: TextField(
-                        controller: row.weight,
-                        keyboardType:
-                            const TextInputType.numberWithOptions(
-                                decimal: true),
-                        textAlign: TextAlign.center,
-                        decoration: const InputDecoration(
-                          isDense: true,
-                          border: OutlineInputBorder(),
-                          contentPadding: EdgeInsets.symmetric(
-                              vertical: 8, horizontal: 6),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    // Miss button
-                    GestureDetector(
-                      onTap: () => setState(() {
-                        row.status = row.status == SetStatus.missed
-                            ? SetStatus.none
-                            : SetStatus.missed;
-                      }),
-                      child: Container(
-                        width: 34,
-                        height: 34,
-                        decoration: BoxDecoration(
-                          color: row.status == SetStatus.missed
-                              ? Colors.red
-                              : Colors.white10,
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: Icon(Icons.close,
-                            size: 18,
-                            color: row.status == SetStatus.missed
-                                ? Colors.white
-                                : Colors.white38),
-                      ),
-                    ),
+            const SizedBox(height: 12),
+
+            if (!isConfirmed) ...[
+              // ── CONFIG PHASE ──────────────────────────────────────────────
+              // Column labels
+              Row(children: [
+                const SizedBox(width: 54, child: Text('Sets', style: labelStyle)),
+                const SizedBox(width: 10),
+                const SizedBox(width: 54, child: Text('Reps', style: labelStyle)),
+                const SizedBox(width: 10),
+                // Weight label + unit dropdown inline
+                Expanded(
+                  child: Row(children: [
+                    const Text('Weight', style: labelStyle),
                     const SizedBox(width: 6),
-                    // Success button
-                    GestureDetector(
-                      onTap: () => setState(() {
-                        row.status = row.status == SetStatus.succeeded
-                            ? SetStatus.none
-                            : SetStatus.succeeded;
-                      }),
-                      child: Container(
-                        width: 34,
-                        height: 34,
-                        decoration: BoxDecoration(
-                          color: row.status == SetStatus.succeeded
-                              ? Colors.green
-                              : Colors.white10,
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: Icon(Icons.check,
-                            size: 18,
-                            color: row.status == SetStatus.succeeded
-                                ? Colors.white
-                                : Colors.white38),
+                    DropdownButtonHideUnderline(
+                      child: DropdownButton<String>(
+                        value: unit,
+                        isDense: true,
+                        items: ['lbs', 'kg', '%'].map((u) => DropdownMenuItem(
+                          value: u,
+                          child: Text(u, style: const TextStyle(fontSize: 11, color: Colors.white70)),
+                        )).toList(),
+                        onChanged: (v) { if (v != null) setState(() => _unitSel[name] = v); },
                       ),
                     ),
-                  ],
+                  ]),
                 ),
-              );
-            }),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.add_circle_outline, size: 22),
-                  tooltip: 'Add set',
-                  onPressed: () => setState(() {
-                    final prev = rows.isNotEmpty ? rows.last : null;
-                    rows.add(_SetRow(
-                      reps: prev?.reps.text ?? '5',
-                      weight: prev?.weight.text ?? '',
-                    ));
-                  }),
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                  visualDensity: VisualDensity.compact,
+                const SizedBox(width: 10),
+                // Other label + type dropdown
+                SizedBox(
+                  width: 90,
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<int>(
+                      value: otherIdx,
+                      isDense: true,
+                      items: List.generate(_otherOptions.length, (idx) => DropdownMenuItem(
+                        value: idx,
+                        child: Text(_otherOptions[idx],
+                            style: const TextStyle(fontSize: 11, color: Colors.white70)),
+                      )),
+                      onChanged: (v) { if (v != null) setState(() => _otherSelIdx[name] = v); },
+                    ),
+                  ),
                 ),
-                const SizedBox(width: 16),
-                IconButton(
-                  icon: const Icon(Icons.remove_circle_outline, size: 22),
-                  tooltip: 'Remove last set',
-                  onPressed: rows.isEmpty
-                      ? null
-                      : () => setState(() => rows.removeLast()..dispose()),
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                  visualDensity: VisualDensity.compact,
+              ]),
+              const SizedBox(height: 6),
+              // Input boxes row
+              Row(children: [
+                SizedBox(
+                  width: 54,
+                  child: TextField(
+                    controller: _setsCountCtrl[name],
+                    keyboardType: TextInputType.number,
+                    textAlign: TextAlign.center,
+                    decoration: const InputDecoration(
+                      isDense: true, border: OutlineInputBorder(),
+                      contentPadding: EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+                    ),
+                  ),
                 ),
-              ],
-            ),
+                const SizedBox(width: 10),
+                SizedBox(
+                  width: 54,
+                  child: TextField(
+                    controller: _repsCtrl[name],
+                    keyboardType: TextInputType.number,
+                    textAlign: TextAlign.center,
+                    decoration: const InputDecoration(
+                      isDense: true, border: OutlineInputBorder(),
+                      contentPadding: EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: TextField(
+                    controller: _weightCtrl[name],
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    textAlign: TextAlign.center,
+                    decoration: InputDecoration(
+                      isDense: true, border: const OutlineInputBorder(),
+                      contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+                      suffixText: isPercent ? '%' : null,
+                      suffixStyle: const TextStyle(fontSize: 10, color: Colors.white38),
+                      helperText: isPercent && oneRM != null &&
+                              double.tryParse(_weightCtrl[name]?.text.trim() ?? '') != null
+                          ? '= ${(double.parse(_weightCtrl[name]!.text.trim()) / 100 * oneRM).toStringAsFixed(1)} lbs'
+                          : null,
+                      helperStyle: const TextStyle(fontSize: 10, color: Colors.white38),
+                    ),
+                    onChanged: (_) => setState(() {}),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                SizedBox(
+                  width: 90,
+                  child: TextField(
+                    controller: _otherValueCtrl[name],
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    textAlign: TextAlign.center,
+                    decoration: const InputDecoration(
+                      isDense: true, border: OutlineInputBorder(),
+                      contentPadding: EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+                    ),
+                  ),
+                ),
+              ]),
+              const SizedBox(height: 14),
+              Center(
+                child: FilledButton(
+                  onPressed: () => _confirmSets(name),
+                  child: const Text('Add Sets'),
+                ),
+              ),
+            ] else ...[
+              // ── CONFIRMED PHASE ───────────────────────────────────────────
+              // Column headers
+              Row(children: [
+                const SizedBox(width: 28, child: Text('Set', style: labelStyle)),
+                const SizedBox(width: 8),
+                const SizedBox(width: 54, child: Text('Reps', style: labelStyle)),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Row(children: [
+                    const Text('Weight', style: labelStyle),
+                    const SizedBox(width: 4),
+                    Text(isPercent ? '%' : unit,
+                        style: const TextStyle(fontSize: 10, color: Colors.white38)),
+                  ]),
+                ),
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 54,
+                  child: Text(_otherOptions[otherIdx], style: labelStyle),
+                ),
+                const SizedBox(width: 76),
+              ]),
+              const SizedBox(height: 4),
+              // Set rows
+              ...rows.asMap().entries.map((e) {
+                final idx = e.key;
+                final row = e.value;
+                final pct = double.tryParse(row.weight.text.trim());
+                final calcWeight = isPercent && oneRM != null && pct != null
+                    ? pct / 100 * oneRM : null;
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      SizedBox(
+                        width: 28,
+                        child: Text('${idx + 1}',
+                            style: TextStyle(
+                                fontSize: 14, fontWeight: FontWeight.bold,
+                                color: Theme.of(context).colorScheme.primary)),
+                      ),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        width: 54,
+                        child: TextField(
+                          controller: row.reps,
+                          keyboardType: TextInputType.number,
+                          textAlign: TextAlign.center,
+                          decoration: const InputDecoration(
+                            isDense: true, border: OutlineInputBorder(),
+                            contentPadding: EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextField(
+                          controller: row.weight,
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          textAlign: TextAlign.center,
+                          onChanged: (_) => setState(() {}),
+                          decoration: InputDecoration(
+                            isDense: true, border: const OutlineInputBorder(),
+                            contentPadding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+                            suffixText: isPercent ? '%' : unit,
+                            suffixStyle: const TextStyle(fontSize: 10, color: Colors.white38),
+                            helperText: calcWeight != null
+                                ? '${calcWeight.toStringAsFixed(1)} lbs' : null,
+                            helperStyle: const TextStyle(fontSize: 10, color: Colors.white38),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        width: 54,
+                        child: TextField(
+                          controller: row.otherValue,
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          textAlign: TextAlign.center,
+                          decoration: const InputDecoration(
+                            isDense: true, border: OutlineInputBorder(),
+                            contentPadding: EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      // Miss
+                      GestureDetector(
+                        onTap: () => setState(() {
+                          row.status = row.status == SetStatus.missed
+                              ? SetStatus.none : SetStatus.missed;
+                        }),
+                        child: Container(
+                          width: 32, height: 32,
+                          decoration: BoxDecoration(
+                            color: row.status == SetStatus.missed ? Colors.red : Colors.white10,
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Icon(Icons.close, size: 16,
+                              color: row.status == SetStatus.missed ? Colors.white : Colors.white38),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      // Success
+                      GestureDetector(
+                        onTap: () => setState(() {
+                          row.status = row.status == SetStatus.succeeded
+                              ? SetStatus.none : SetStatus.succeeded;
+                        }),
+                        child: Container(
+                          width: 32, height: 32,
+                          decoration: BoxDecoration(
+                            color: row.status == SetStatus.succeeded ? Colors.green : Colors.white10,
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Icon(Icons.check, size: 16,
+                              color: row.status == SetStatus.succeeded ? Colors.white : Colors.white38),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }),
+              // Add / remove set buttons
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.add_circle_outline, size: 22),
+                    tooltip: 'Add set',
+                    onPressed: () => setState(() {
+                      final prev = rows.isNotEmpty ? rows.last : null;
+                      rows.add(_SetRow(
+                        reps: prev?.reps.text ?? '5',
+                        weight: prev?.weight.text ?? '',
+                      ));
+                    }),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  const SizedBox(width: 16),
+                  IconButton(
+                    icon: const Icon(Icons.remove_circle_outline, size: 22),
+                    tooltip: 'Remove last set',
+                    onPressed: rows.isEmpty
+                        ? null
+                        : () => setState(() => rows.removeLast()..dispose()),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ],
+              ),
+            ],
           ],
         ),
       ),
@@ -3461,7 +3902,9 @@ class _ProgramTabViewState extends State<_ProgramTabView> {
   }
 
   void _refreshWorkouts() {
-    _sortedWorkouts = [...widget.profile.workouts]
+    _sortedWorkouts = widget.profile.workouts
+        .where((w) => _sameDay(w.date, _selectedDay))
+        .toList()
       ..sort((a, b) => b.date.compareTo(a.date));
   }
 
@@ -3651,7 +4094,10 @@ class _ProgramTabViewState extends State<_ProgramTabView> {
                   _dayData(day)!.exercises.isNotEmpty;
               final primary = Theme.of(context).colorScheme.primary;
               return GestureDetector(
-                onTap: () => setState(() => _selectedDay = day),
+                onTap: () => setState(() {
+                  _selectedDay = day;
+                  _refreshWorkouts();
+                }),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -3779,7 +4225,7 @@ class _ProgramTabViewState extends State<_ProgramTabView> {
                     ),
                   ),
                 ),
-              // Completed Workouts header
+              // Workouts header
               SliverToBoxAdapter(
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
@@ -3787,12 +4233,12 @@ class _ProgramTabViewState extends State<_ProgramTabView> {
                     Icon(Icons.fitness_center, size: 15,
                         color: Theme.of(context).colorScheme.primary),
                     const SizedBox(width: 6),
-                    const Text('Completed Workouts',
+                    const Text('Workouts',
                         style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
                   ]),
                 ),
               ),
-              // Completed workouts list
+              // Workouts list (planned + completed)
               if (_sortedWorkouts.isEmpty)
                 const SliverToBoxAdapter(
                   child: Padding(
@@ -3809,8 +4255,9 @@ class _ProgramTabViewState extends State<_ProgramTabView> {
                       (_, i) {
                         final workout = _sortedWorkouts[i];
                         final exNames = workout.exercises.map((e) => e.liftName).join(' · ');
+                        final isPlanned = !workout.completed;
                         return Dismissible(
-                          key: Key('workout_${workout.date.toIso8601String()}'),
+                          key: Key('workout_${workout.hashCode}_${workout.date.toIso8601String()}'),
                           direction: DismissDirection.endToStart,
                           background: _dismissBackground(),
                           onDismissed: (_) {
@@ -3822,48 +4269,92 @@ class _ProgramTabViewState extends State<_ProgramTabView> {
                           },
                           child: Card(
                             margin: const EdgeInsets.only(bottom: 8),
+                            shape: isPlanned
+                                ? RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                    side: BorderSide(
+                                      color: Theme.of(context).colorScheme.primary,
+                                      width: 1.5,
+                                    ),
+                                  )
+                                : null,
+                            color: isPlanned
+                                ? Theme.of(context).colorScheme.surface
+                                : null,
                             child: ListTile(
                               contentPadding: const EdgeInsets.symmetric(
                                   horizontal: 16, vertical: 6),
                               title: Row(children: [
-                                Text(_fmtDate(workout.date),
-                                    style: const TextStyle(
-                                        fontWeight: FontWeight.w600, fontSize: 15)),
-                                const SizedBox(width: 8),
+                                if (isPlanned) ...[
+                                  Icon(Icons.pending_outlined, size: 14,
+                                      color: Theme.of(context).colorScheme.primary),
+                                  const SizedBox(width: 6),
+                                ],
+                                Expanded(
+                                  child: Text(_fmtDate(workout.date),
+                                      style: TextStyle(
+                                          fontWeight: FontWeight.w600,
+                                          fontSize: 15,
+                                          color: isPlanned ? Colors.white70 : Colors.white)),
+                                ),
                                 Container(
                                   padding: const EdgeInsets.symmetric(
                                       horizontal: 6, vertical: 2),
                                   decoration: BoxDecoration(
-                                    color: Theme.of(context).colorScheme.primaryContainer,
+                                    color: isPlanned
+                                        ? Colors.transparent
+                                        : Theme.of(context).colorScheme.primaryContainer,
                                     borderRadius: BorderRadius.circular(6),
+                                    border: isPlanned
+                                        ? Border.all(
+                                            color: Theme.of(context).colorScheme.primary,
+                                            width: 1)
+                                        : null,
                                   ),
-                                  child: Text(workout.type.label,
-                                      style: TextStyle(
-                                          fontSize: 10,
-                                          color: Theme.of(context)
-                                              .colorScheme
-                                              .onPrimaryContainer)),
+                                  child: Text(
+                                    isPlanned ? 'Planned' : workout.type.label,
+                                    style: TextStyle(
+                                        fontSize: 10,
+                                        color: isPlanned
+                                            ? Theme.of(context).colorScheme.primary
+                                            : Theme.of(context).colorScheme.onPrimaryContainer),
+                                  ),
                                 ),
                               ]),
                               subtitle: Text(
                                   exNames.isEmpty ? 'No exercises' : exNames,
-                                  style: const TextStyle(
-                                      fontSize: 12, color: Colors.white60),
+                                  style: TextStyle(
+                                      fontSize: 12,
+                                      color: isPlanned ? Colors.white38 : Colors.white60),
                                   overflow: TextOverflow.ellipsis),
-                              trailing: const Icon(Icons.chevron_right),
+                              trailing: Icon(
+                                isPlanned ? Icons.play_circle_outline : Icons.chevron_right,
+                                color: isPlanned
+                                    ? Theme.of(context).colorScheme.primary
+                                    : Colors.white54,
+                              ),
                               onTap: () => Navigator.push(
                                 context,
                                 MaterialPageRoute(
-                                  builder: (_) => WorkoutDetailScreen(
-                                    workout: workout,
-                                    profile: widget.profile,
-                                    currentUserName: widget.currentUserName,
-                                    isOwnProfile: true,
-                                    onChanged: () {
-                                      setState(() {});
-                                      widget.onChanged();
-                                    },
-                                  ),
+                                  builder: (_) => isPlanned
+                                      ? WorkoutScreen(
+                                          profile: widget.profile,
+                                          editingWorkout: workout,
+                                          onSaved: () {
+                                            setState(() => _refreshWorkouts());
+                                            widget.onChanged();
+                                          },
+                                        )
+                                      : WorkoutDetailScreen(
+                                          workout: workout,
+                                          profile: widget.profile,
+                                          currentUserName: widget.currentUserName,
+                                          isOwnProfile: true,
+                                          onChanged: () {
+                                            setState(() {});
+                                            widget.onChanged();
+                                          },
+                                        ),
                                 ),
                               ),
                             ),
@@ -4831,11 +5322,28 @@ class _WorkoutDetailScreenState extends State<WorkoutDetailScreen> {
             style: const TextStyle(fontWeight: FontWeight.bold)),
         centerTitle: true,
         actions: [
-          if (widget.isOwnProfile)
+          if (widget.isOwnProfile) ...[
+            IconButton(
+              icon: const Icon(Icons.edit_outlined),
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => WorkoutScreen(
+                    profile: widget.profile,
+                    editingWorkout: widget.workout,
+                    onSaved: () {
+                      setState(() {});
+                      widget.onChanged();
+                    },
+                  ),
+                ),
+              ),
+            ),
             IconButton(
               icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
               onPressed: _deleteWorkout,
             ),
+          ],
         ],
       ),
       body: Column(
