@@ -3360,6 +3360,7 @@ class _ProgramTabView extends StatefulWidget {
 class _ProgramTabViewState extends State<_ProgramTabView> {
   late DateTime _weekStart;
   late DateTime _selectedDay;
+  late List<Workout> _sortedWorkouts;
 
   static const _dayLabels = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
   static const _dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
@@ -3369,9 +3370,15 @@ class _ProgramTabViewState extends State<_ProgramTabView> {
   void initState() {
     super.initState();
     final today = _dateOnly(DateTime.now());
-    final daysFromSunday = today.weekday % 7; // Mon=1%7=1 … Sun=7%7=0
+    final daysFromSunday = today.weekday % 7;
     _weekStart = today.subtract(Duration(days: daysFromSunday));
     _selectedDay = today;
+    _refreshWorkouts();
+  }
+
+  void _refreshWorkouts() {
+    _sortedWorkouts = [...widget.profile.workouts]
+      ..sort((a, b) => b.date.compareTo(a.date));
   }
 
   DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
@@ -3524,8 +3531,6 @@ class _ProgramTabViewState extends State<_ProgramTabView> {
   Widget build(BuildContext context) {
     final dayData = _dayData(_selectedDay);
     final exercises = dayData?.exercises ?? [];
-    final sortedWorkouts = [...widget.profile.workouts]
-      ..sort((a, b) => b.date.compareTo(a.date));
 
     return Column(
       children: [
@@ -3704,7 +3709,7 @@ class _ProgramTabViewState extends State<_ProgramTabView> {
                 ),
               ),
               // Completed workouts list
-              if (sortedWorkouts.isEmpty)
+              if (_sortedWorkouts.isEmpty)
                 const SliverToBoxAdapter(
                   child: Padding(
                     padding: EdgeInsets.fromLTRB(16, 0, 16, 16),
@@ -3718,14 +3723,17 @@ class _ProgramTabViewState extends State<_ProgramTabView> {
                   sliver: SliverList(
                     delegate: SliverChildBuilderDelegate(
                       (_, i) {
-                        final workout = sortedWorkouts[i];
+                        final workout = _sortedWorkouts[i];
                         final exNames = workout.exercises.map((e) => e.liftName).join(' · ');
                         return Dismissible(
                           key: Key('workout_${workout.date.toIso8601String()}'),
                           direction: DismissDirection.endToStart,
                           background: _dismissBackground(),
                           onDismissed: (_) {
-                            setState(() => widget.profile.workouts.remove(workout));
+                            setState(() {
+                              widget.profile.workouts.remove(workout);
+                              _refreshWorkouts();
+                            });
                             widget.onChanged();
                           },
                           child: Card(
@@ -3778,7 +3786,7 @@ class _ProgramTabViewState extends State<_ProgramTabView> {
                           ),
                         );
                       },
-                      childCount: sortedWorkouts.length,
+                      childCount: _sortedWorkouts.length,
                     ),
                   ),
                 ),
