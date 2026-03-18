@@ -120,6 +120,7 @@ class Profile {
   List<Lift> lifts;
   List<Workout> workouts;
   List<String> goals;
+  int weeklyWorkoutGoal;
   String? photoData; // base64 data URL
   List<ProgramDay> program;
 
@@ -133,6 +134,7 @@ class Profile {
     List<Lift>? lifts,
     List<Workout>? workouts,
     List<String>? goals,
+    this.weeklyWorkoutGoal = 3,
     this.photoData,
     List<ProgramDay>? program,
   })  : username = username ?? name,
@@ -150,6 +152,7 @@ class Profile {
         'lifts': lifts.map((l) => l.toJson()).toList(),
         'workouts': workouts.map((w) => w.toJson()).toList(),
         'goals': goals,
+        'weeklyWorkoutGoal': weeklyWorkoutGoal,
         if (photoData != null) 'photoData': photoData,
         'program': program.map((d) => d.toJson()).toList(),
       };
@@ -172,6 +175,7 @@ class Profile {
       goals: (j['goals'] as List<dynamic>? ?? [])
           .map((e) => e as String)
           .toList(),
+      weeklyWorkoutGoal: j['weeklyWorkoutGoal'] as int? ?? 3,
       photoData: j['photoData'] as String?,
       program: (j['program'] as List<dynamic>? ?? [])
           .map((e) => ProgramDay.fromJson(e as Map<String, dynamic>))
@@ -1462,6 +1466,49 @@ class _HomeScreenState extends State<HomeScreen>
     widget.onChanged();
   }
 
+  int _workoutsThisWeek() {
+    final now = DateTime.now();
+    // Week starts on Sunday
+    final startOfWeek = DateTime(now.year, now.month, now.day)
+        .subtract(Duration(days: now.weekday % 7));
+    return widget.profile.workouts
+        .where((w) => !w.date.isBefore(startOfWeek))
+        .length;
+  }
+
+  void _editWeeklyGoal() {
+    final ctrl = TextEditingController(
+        text: widget.profile.weeklyWorkoutGoal.toString());
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Weekly Workout Goal'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          keyboardType: TextInputType.number,
+          decoration: const InputDecoration(hintText: 'Workouts per week'),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () {
+              final val = int.tryParse(ctrl.text.trim());
+              if (val != null && val > 0) {
+                Navigator.pop(context);
+                setState(() => widget.profile.weeklyWorkoutGoal = val);
+                widget.onChanged();
+              }
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildOtherProfileDashboard() {
     final photoData = widget.profile.photoData;
 
@@ -1840,7 +1887,44 @@ class _HomeScreenState extends State<HomeScreen>
                               ),
                             ],
                           ),
-                          const SizedBox(height: 12),
+                          const SizedBox(height: 8),
+                          // Workouts this week
+                          GestureDetector(
+                            onTap: _editWeeklyGoal,
+                            child: Row(
+                              children: [
+                                Icon(Icons.fitness_center,
+                                    size: 13,
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .primary),
+                                const SizedBox(width: 5),
+                                const Expanded(
+                                  child: Text('Workouts this week',
+                                      style: TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.white60)),
+                                ),
+                                Text(
+                                  '${_workoutsThisWeek()}/${widget.profile.weeklyWorkoutGoal}',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.bold,
+                                    color: _workoutsThisWeek() >=
+                                            widget.profile.weeklyWorkoutGoal
+                                        ? Colors.greenAccent
+                                        : Theme.of(context)
+                                            .colorScheme
+                                            .primary,
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                                const Icon(Icons.edit,
+                                    size: 12, color: Colors.white30),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 10),
                           if (widget.profile.goals.isEmpty)
                             const Text('No goals set.\nTap + to add one.',
                                 style: TextStyle(
