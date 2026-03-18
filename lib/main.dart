@@ -2777,6 +2777,7 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
   final Map<String, String> _unitSel = {};
   final Map<String, FixedExtentScrollController> _otherScrollCtrl = {};
   final Map<String, TextEditingController> _otherValueCtrl = {};
+  final Map<String, int> _otherSelIdx = {};
 static const _otherOptions = ['Reps', 'Weight', 'Height', 'RPE'];
 
   @override
@@ -2820,6 +2821,7 @@ static const _otherOptions = ['Reps', 'Weight', 'Height', 'RPE'];
       _unitSel[name] = 'lbs';
       _otherScrollCtrl[name] = FixedExtentScrollController();
       _otherValueCtrl[name] = TextEditingController();
+      _otherSelIdx[name] = 0;
       _setCtrl[name] = [_SetRow(), _SetRow(), _SetRow()];
     });
   }
@@ -2833,6 +2835,7 @@ static const _otherOptions = ['Reps', 'Weight', 'Height', 'RPE'];
       _unitSel.remove(name);
       _otherScrollCtrl.remove(name)?.dispose();
       _otherValueCtrl.remove(name)?.dispose();
+      _otherSelIdx.remove(name);
       for (final r in _setCtrl.remove(name) ?? []) { r.dispose(); }
     });
   }
@@ -2874,7 +2877,7 @@ static const _otherOptions = ['Reps', 'Weight', 'Height', 'RPE'];
         ex.weight =
             double.tryParse(_weightCtrl[ex.liftName]?.text.trim() ?? '');
         ex.unit = _unitSel[ex.liftName] ?? 'lbs';
-        final otherIdx = _otherScrollCtrl[ex.liftName]?.selectedItem ?? 0;
+        final otherIdx = _otherSelIdx[ex.liftName] ?? 0;
         final otherVal = _otherValueCtrl[ex.liftName]?.text.trim() ?? '';
         ex.otherType = _otherOptions[otherIdx];
         ex.otherValue = otherVal.isEmpty ? null : otherVal;
@@ -3086,7 +3089,7 @@ static const _otherOptions = ['Reps', 'Weight', 'Height', 'RPE'];
                         controller: _otherScrollCtrl[ex.liftName],
                         itemExtent: 32,
                         physics: const FixedExtentScrollPhysics(),
-                        onSelectedItemChanged: (_) => setState(() {}),
+                        onSelectedItemChanged: (idx) => setState(() => _otherSelIdx[ex.liftName] = idx),
                         children: _otherOptions
                             .map((o) => Center(
                                   child: Text(o,
@@ -3125,10 +3128,7 @@ static const _otherOptions = ['Reps', 'Weight', 'Height', 'RPE'];
                     keyboardType: const TextInputType.numberWithOptions(
                         decimal: true),
                     decoration: InputDecoration(
-                      labelText: _otherOptions[
-                          _otherScrollCtrl[ex.liftName]
-                                  ?.selectedItem ??
-                              0],
+                      labelText: _otherOptions[_otherSelIdx[ex.liftName] ?? 0],
                       border: const OutlineInputBorder(),
                     ),
                   ),
