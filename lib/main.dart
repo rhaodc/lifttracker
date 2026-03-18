@@ -1333,7 +1333,9 @@ class _HomeScreenState extends State<HomeScreen>
               tooltip: 'Admin Panel',
               onPressed: () => Navigator.push(
                 context,
-                MaterialPageRoute(builder: (_) => const AdminScreen()),
+                MaterialPageRoute(
+                    builder: (_) =>
+                        AdminScreen(currentUser: widget.profile)),
               ),
             ),
           if (isOwn)
@@ -4195,7 +4197,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 // ─── Admin Screen ─────────────────────────────────────────────────────────────
 
 class AdminScreen extends StatefulWidget {
-  const AdminScreen({super.key});
+  final Profile currentUser;
+  const AdminScreen({super.key, required this.currentUser});
 
   @override
   State<AdminScreen> createState() => _AdminScreenState();
@@ -4354,6 +4357,23 @@ class _AdminScreenState extends State<AdminScreen> {
                           ],
                         ),
                       ),
+                      // Toggle admin — Muppy's admin is permanent
+                      if (p.id != widget.currentUser.id)
+                        IconButton(
+                          icon: Icon(
+                            p.isAdmin
+                                ? Icons.admin_panel_settings
+                                : Icons.person_outline,
+                            color: p.isAdmin ? Colors.amber : null,
+                          ),
+                          tooltip: p.isAdmin ? 'Revoke admin' : 'Grant admin',
+                          onPressed: p.username.toLowerCase() == 'muppy'
+                              ? null // Muppy's admin can never be revoked
+                              : () async {
+                                  p.isAdmin = !p.isAdmin;
+                                  await LiftStore.saveProfile(p);
+                                },
+                        ),
                       IconButton(
                         icon: const Icon(Icons.edit_outlined),
                         tooltip: 'Edit profile',
@@ -4363,7 +4383,9 @@ class _AdminScreenState extends State<AdminScreen> {
                         icon: const Icon(Icons.delete_outline,
                             color: Colors.red),
                         tooltip: 'Delete profile',
-                        onPressed: p.id == null
+                        // Cannot delete Muppy
+                        onPressed: (p.id == null ||
+                                p.username.toLowerCase() == 'muppy')
                             ? null
                             : () => _confirmDelete(p),
                       ),
