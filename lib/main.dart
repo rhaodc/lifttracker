@@ -391,6 +391,7 @@ class ProgramExercise {
   String? groupId;         // exercises sharing a groupId form an EMOM/AMRAP group
   String? groupType;       // 'emom', 'emomStrength', or 'amrap'
   int? groupIntervalMin;   // EMOM: minutes per interval
+  int? groupIntervalSec;   // EMOM: additional seconds per interval
   int? groupTotalSets;     // EMOM: total sets; AMRAP: time cap in minutes
   double? groupWorkingMax; // emomStrength: working max in lbs
   bool completed;          // true when user marks this exercise/group as done
@@ -402,6 +403,7 @@ class ProgramExercise {
     this.groupId,
     this.groupType,
     this.groupIntervalMin,
+    this.groupIntervalSec,
     this.groupTotalSets,
     this.groupWorkingMax,
     this.completed = false,
@@ -414,6 +416,7 @@ class ProgramExercise {
         if (groupId != null) 'groupId': groupId,
         if (groupType != null) 'groupType': groupType,
         if (groupIntervalMin != null) 'groupIntervalMin': groupIntervalMin,
+        if (groupIntervalSec != null && groupIntervalSec != 0) 'groupIntervalSec': groupIntervalSec,
         if (groupTotalSets != null) 'groupTotalSets': groupTotalSets,
         if (groupWorkingMax != null) 'groupWorkingMax': groupWorkingMax,
         if (completed) 'completed': completed,
@@ -428,6 +431,7 @@ class ProgramExercise {
         groupId: j['groupId'] as String?,
         groupType: j['groupType'] as String?,
         groupIntervalMin: j['groupIntervalMin'] as int?,
+        groupIntervalSec: j['groupIntervalSec'] as int? ?? 0,
         groupTotalSets: j['groupTotalSets'] as int?,
         groupWorkingMax: (j['groupWorkingMax'] as num?)?.toDouble(),
         completed: j['completed'] as bool? ?? false,
@@ -4467,6 +4471,7 @@ class _ProgGroup {
   final String type; // 'emom' or 'amrap'
   final List<ProgramExercise> exercises;
   final TextEditingController intervalMinCtrl;
+  final TextEditingController intervalSecCtrl;
   final TextEditingController totalSetsCtrl; // EMOM: total intervals; AMRAP: time cap
 
   // Per-exercise controllers
@@ -4492,9 +4497,11 @@ class _ProgGroup {
     required this.type,
     required this.exercises,
     String intervalMin = '1',
+    String intervalSec = '0',
     String totalSets = '6',
     String workingMax = '',
   })  : intervalMinCtrl = TextEditingController(text: intervalMin),
+        intervalSecCtrl = TextEditingController(text: intervalSec),
         totalSetsCtrl = TextEditingController(text: totalSets),
         workingMaxCtrl = TextEditingController(text: workingMax) {
     for (final ex in exercises) { _initExCtrl(ex); }
@@ -4543,6 +4550,7 @@ class _ProgGroup {
 
   void flush() {
     final intervalMin = int.tryParse(intervalMinCtrl.text) ?? 1;
+    final intervalSec = int.tryParse(intervalSecCtrl.text) ?? 0;
     final totalSets = int.tryParse(totalSetsCtrl.text) ?? 6;
     final workingMax = double.tryParse(workingMaxCtrl.text);
     final isSingleExEmom = (type == 'emom' || type == 'emomStrength') && exercises.length == 1;
@@ -4571,12 +4579,14 @@ class _ProgGroup {
       }
       ex.groupType = type;
       ex.groupIntervalMin = intervalMin;
+      ex.groupIntervalSec = intervalSec;
       ex.groupTotalSets = totalSets;
     }
   }
 
   void dispose() {
     intervalMinCtrl.dispose();
+    intervalSecCtrl.dispose();
     totalSetsCtrl.dispose();
     workingMaxCtrl.dispose();
     for (final c in nameCtrl.values) { c.dispose(); }
@@ -4668,6 +4678,7 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
           type: ex.groupType ?? 'emom',
           exercises: groupExes,
           intervalMin: (ex.groupIntervalMin ?? 1).toString(),
+          intervalSec: (ex.groupIntervalSec ?? 0).toString(),
           totalSets: (ex.groupTotalSets ?? 6).toString(),
           workingMax: ex.groupWorkingMax != null ? ex.groupWorkingMax!.toStringAsFixed(0) : '',
         );
@@ -4784,85 +4795,24 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
   // ── Exercise picker (Strength / EMOM / AMRAP) ─────────────────────────────
 
   Future<Set<String>> _showExercisePicker({required Set<String> exclude}) async {
-    final liftNames = widget.profile.lifts.map((l) => l.name).toList();
-    final selected = <String>{};
-    final customCtrl = TextEditingController();
-
+    Set<String> result = {};
     await showDialog(
       context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDlg) => AlertDialog(
-          title: const Text('Select Exercises'),
-          content: SizedBox(
-            width: double.maxFinite,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (liftNames.isNotEmpty) ...[
-                  SizedBox(
-                    height: 200,
-                    child: ListView(
-                      children: liftNames.where((n) => !exclude.contains(n)).map((name) =>
-                        CheckboxListTile(
-                          title: Text(name),
-                          value: selected.contains(name),
-                          onChanged: (v) => setDlg(() {
-                            if (v == true) { selected.add(name); } else { selected.remove(name); }
-                          }),
-                          dense: true,
-                          contentPadding: EdgeInsets.zero,
-                        ),
-                      ).toList(),
-                    ),
-                  ),
-                  const Divider(),
-                ],
-                Row(children: [
-                  Expanded(
-                    child: TextField(
-                      controller: customCtrl,
-                      decoration: const InputDecoration(
-                        hintText: 'Custom exercise…',
-                        isDense: true,
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  IconButton(
-                    icon: const Icon(Icons.add),
-                    onPressed: () {
-                      final t = customCtrl.text.trim();
-                      if (t.isNotEmpty) { setDlg(() => selected.add(t)); customCtrl.clear(); }
-                    },
-                  ),
-                ]),
-                if (selected.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 4,
-                    children: selected.map((s) => Chip(
-                      label: Text(s, style: const TextStyle(fontSize: 12)),
-                      onDeleted: () => setDlg(() => selected.remove(s)),
-                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    )).toList(),
-                  ),
-                ],
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-            FilledButton(
-              onPressed: selected.isEmpty ? null : () => Navigator.pop(ctx),
-              child: const Text('Add'),
-            ),
-          ],
-        ),
+      builder: (_) => _ExercisePickerDialog(
+        existingLifts: widget.profile.lifts,
+        alreadyAdded: exclude,
+        onConfirm: (names, newNames) {
+          for (final n in newNames) {
+            if (!widget.profile.lifts.any((l) => l.name == n)) {
+              widget.profile.lifts.add(Lift(name: n));
+            }
+          }
+          if (newNames.isNotEmpty) widget.onWorkoutLogged?.call();
+          result = names.toSet();
+        },
       ),
     );
-    customCtrl.dispose();
-    return selected;
+    return result;
   }
 
   Future<void> _addStrength(String blockKey, List<_SectionItem> section) async {
@@ -4885,6 +4835,7 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
     // Show config dialog (min/sets for EMOM/EMOM Strength, time cap for AMRAP)
     final isEmomType = type == 'emom' || type == 'emomStrength';
     final configCtrl1 = TextEditingController(text: isEmomType ? '1' : '20');
+    final configCtrlSec = TextEditingController(text: '0');
     final configCtrl2 = TextEditingController(text: '6');
     bool confirmed = false;
 
@@ -4912,13 +4863,25 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
                     controller: configCtrl1,
                     keyboardType: TextInputType.number,
                     decoration: const InputDecoration(
-                      labelText: 'Min per interval',
+                      labelText: 'Min',
                       border: OutlineInputBorder(),
                       suffixText: 'min',
                     ),
                   ),
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    controller: configCtrlSec,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: 'Sec',
+                      border: OutlineInputBorder(),
+                      suffixText: 'sec',
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
                 Expanded(
                   child: TextField(
                     controller: configCtrl2,
@@ -4937,6 +4900,8 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
                 final exList = selected.toList();
                 final totalSets = int.tryParse(configCtrl2.text) ?? 6;
                 final minPer = int.tryParse(configCtrl1.text) ?? 1;
+                final secPer = int.tryParse(configCtrlSec.text) ?? 0;
+                final intervalLabel = secPer > 0 ? '$minPer:${secPer.toString().padLeft(2, '0')}' : '$minPer';
                 final lines = List.generate(totalSets, (i) {
                   final exName = exList[i % exList.length];
                   return 'Min ${i + 1}: $exName';
@@ -4950,7 +4915,7 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Preview (${minPer}min intervals)',
+                      Text('Preview (E${intervalLabel}MOM)',
                           style: const TextStyle(fontSize: 11, color: Colors.white54)),
                       const SizedBox(height: 4),
                       ...lines.map((l) => Text(l,
@@ -4983,6 +4948,7 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
     );
 
     configCtrl1.dispose();
+    configCtrlSec.dispose();
     configCtrl2.dispose();
 
     if (!confirmed) return;
@@ -4994,6 +4960,7 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
         type: type,
         exercises: exercises,
         intervalMin: configCtrl1.text,
+        intervalSec: configCtrlSec.text,
         totalSets: configCtrl2.text,
       );
       section.add(_SectionItem.group(group));
@@ -5247,11 +5214,21 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
                       keyboardType: TextInputType.number,
                       onChanged: (_) => setState(() {}),
                       decoration: const InputDecoration(
-                        labelText: 'Min per interval',
+                        labelText: 'Min',
                         border: OutlineInputBorder(), isDense: true, suffixText: 'min',
                       ),
                     )),
-                    const SizedBox(width: 12),
+                    const SizedBox(width: 8),
+                    Expanded(child: TextField(
+                      controller: group.intervalSecCtrl,
+                      keyboardType: TextInputType.number,
+                      onChanged: (_) => setState(() {}),
+                      decoration: const InputDecoration(
+                        labelText: 'Sec',
+                        border: OutlineInputBorder(), isDense: true, suffixText: 'sec',
+                      ),
+                    )),
+                    const SizedBox(width: 8),
                     Expanded(child: TextField(
                       controller: group.totalSetsCtrl,
                       keyboardType: TextInputType.number,
@@ -5612,15 +5589,7 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(children: [
-            Expanded(child: Text(title,
-                style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold))),
-            TextButton.icon(
-              onPressed: () => _showAddMenu(blockKey, section),
-              icon: const Icon(Icons.add, size: 18),
-              label: const Text('Add Exercise'),
-            ),
-          ]),
+          Text(title, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
           if (section.isEmpty)
             Padding(
@@ -5647,6 +5616,15 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
                       : _buildExerciseCard(section[i].ex!, section, i),
               ],
             ),
+          TextButton.icon(
+            onPressed: () => _showAddMenu(blockKey, section),
+            icon: const Icon(Icons.add, size: 18),
+            label: const Text('Add Exercise'),
+            style: TextButton.styleFrom(
+              alignment: Alignment.centerLeft,
+              padding: const EdgeInsets.symmetric(horizontal: 0, vertical: 4),
+            ),
+          ),
           const Divider(height: 24),
         ],
       ),
@@ -5733,11 +5711,13 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
     }
     final type = first.groupType ?? 'emom';
     final interval = first.groupIntervalMin ?? 1;
+    final sec = first.groupIntervalSec ?? 0;
     final total = first.groupTotalSets ?? 6;
     final names = exs.map((e) => e.name).join(', ');
+    final intervalLabel = sec > 0 ? '$interval:${sec.toString().padLeft(2, '0')}' : '$interval';
     final prefix = switch (type) {
-      'emom' => interval == 1 ? 'EMOM' : 'E${interval}MOM',
-      'emomStrength' => interval == 1 ? 'EMOM (Strength)' : 'E${interval}MOM (Strength)',
+      'emom' => interval == 1 && sec == 0 ? 'EMOM' : 'E${intervalLabel}MOM',
+      'emomStrength' => interval == 1 && sec == 0 ? 'EMOM (Strength)' : 'E${intervalLabel}MOM (Strength)',
       'amrap' => 'AMRAP',
       _ => 'Group',
     };
@@ -6113,6 +6093,9 @@ Widget _buildSetsTable(BuildContext context, ProgramExercise ex, {bool showStatu
                 keyboardType: TextInputType.number,
                 textAlign: TextAlign.center,
                 style: const TextStyle(fontSize: 13),
+                onChanged: (v) => setState(() {
+                  for (int j = i + 1; j < rList.length; j++) { rList[j].text = v; }
+                }),
                 decoration: const InputDecoration(
                   isDense: true,
                   border: OutlineInputBorder(),
@@ -6125,6 +6108,9 @@ Widget _buildSetsTable(BuildContext context, ProgramExercise ex, {bool showStatu
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
                 textAlign: TextAlign.center,
                 style: const TextStyle(fontSize: 13),
+                onChanged: (v) => setState(() {
+                  for (int j = i + 1; j < wList.length; j++) { wList[j].text = v; }
+                }),
                 decoration: const InputDecoration(
                   isDense: true,
                   border: OutlineInputBorder(),
@@ -6137,6 +6123,9 @@ Widget _buildSetsTable(BuildContext context, ProgramExercise ex, {bool showStatu
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
                 textAlign: TextAlign.center,
                 style: const TextStyle(fontSize: 13),
+                onChanged: (v) => setState(() {
+                  for (int j = i + 1; j < eList.length; j++) { eList[j].text = v; }
+                }),
                 decoration: const InputDecoration(
                   isDense: true,
                   border: OutlineInputBorder(),
@@ -6183,44 +6172,65 @@ Widget _buildSetsTable(BuildContext context, ProgramExercise ex, {bool showStatu
     final sList = _statusMap[ex];
     if (sList == null || i >= sList.length) return const SizedBox.shrink();
     final status = sList[i];
-    if (status == SetStatus.missed) {
-      return Row(mainAxisSize: MainAxisSize.min, children: [
-        const SizedBox(width: 6),
-        Container(
-          width: 28, height: 28,
-          decoration: BoxDecoration(color: Colors.red, borderRadius: BorderRadius.circular(6)),
-          child: const Icon(Icons.close, size: 14, color: Colors.white),
-        ),
-        const SizedBox(width: 32),
-      ]);
+    final locked = ex.completed == true;
+
+    // When locked (workout marked done), show only the selected icon as static
+    if (locked) {
+      if (status == SetStatus.missed) {
+        return Row(mainAxisSize: MainAxisSize.min, children: [
+          const SizedBox(width: 6),
+          Container(
+            width: 28, height: 28,
+            decoration: BoxDecoration(color: Colors.red, borderRadius: BorderRadius.circular(6)),
+            child: const Icon(Icons.close, size: 14, color: Colors.white),
+          ),
+          const SizedBox(width: 32),
+        ]);
+      }
+      if (status == SetStatus.succeeded) {
+        return Row(mainAxisSize: MainAxisSize.min, children: [
+          const SizedBox(width: 38),
+          Container(
+            width: 28, height: 28,
+            decoration: BoxDecoration(color: Colors.green, borderRadius: BorderRadius.circular(6)),
+            child: const Icon(Icons.check, size: 14, color: Colors.white),
+          ),
+        ]);
+      }
+      // no status selected and locked — show empty space
+      return const SizedBox(width: 66);
     }
-    if (status == SetStatus.succeeded) {
-      return Row(mainAxisSize: MainAxisSize.min, children: [
-        const SizedBox(width: 38),
-        Container(
-          width: 28, height: 28,
-          decoration: BoxDecoration(color: Colors.green, borderRadius: BorderRadius.circular(6)),
-          child: const Icon(Icons.check, size: 14, color: Colors.white),
-        ),
-      ]);
-    }
+
+    // Not locked — fully toggleable
     return Row(mainAxisSize: MainAxisSize.min, children: [
       const SizedBox(width: 6),
       GestureDetector(
-        onTap: () => setState(() { sList[i] = SetStatus.missed; }),
+        onTap: () => setState(() {
+          sList[i] = status == SetStatus.missed ? SetStatus.none : SetStatus.missed;
+        }),
         child: Container(
           width: 28, height: 28,
-          decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(6)),
-          child: const Icon(Icons.close, size: 14, color: Colors.white38),
+          decoration: BoxDecoration(
+            color: status == SetStatus.missed ? Colors.red : Colors.white10,
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Icon(Icons.close, size: 14,
+              color: status == SetStatus.missed ? Colors.white : Colors.white38),
         ),
       ),
       const SizedBox(width: 4),
       GestureDetector(
-        onTap: () => setState(() { sList[i] = SetStatus.succeeded; }),
+        onTap: () => setState(() {
+          sList[i] = status == SetStatus.succeeded ? SetStatus.none : SetStatus.succeeded;
+        }),
         child: Container(
           width: 28, height: 28,
-          decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(6)),
-          child: const Icon(Icons.check, size: 14, color: Colors.white38),
+          decoration: BoxDecoration(
+            color: status == SetStatus.succeeded ? Colors.green : Colors.white10,
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Icon(Icons.check, size: 14,
+              color: status == SetStatus.succeeded ? Colors.white : Colors.white38),
         ),
       ),
     ]);
@@ -6319,6 +6329,7 @@ Widget _buildSetsTable(BuildContext context, ProgramExercise ex, {bool showStatu
                     if (isStrength) ...[
                       TextField(
                         controller: _workingMaxCtrl[ex],
+                        readOnly: readOnly,
                         keyboardType: const TextInputType.numberWithOptions(decimal: true),
                         decoration: const InputDecoration(
                           labelText: 'Working Max',
@@ -6390,6 +6401,11 @@ Widget _buildSetsTable(BuildContext context, ProgramExercise ex, {bool showStatu
                             controller: rList[i],
                             keyboardType: TextInputType.number,
                             textAlign: TextAlign.center,
+                            onChanged: (v) => setState(() {
+                              for (int j = i + 1; j < rList.length; j++) {
+                                rList[j].text = v;
+                              }
+                            }),
                             decoration: const InputDecoration(
                               isDense: true, border: OutlineInputBorder(),
                               contentPadding: EdgeInsets.symmetric(vertical: 6, horizontal: 4),
@@ -6404,11 +6420,17 @@ Widget _buildSetsTable(BuildContext context, ProgramExercise ex, {bool showStatu
                               onChanged: (v) {
                                 final pct = double.tryParse(v);
                                 final wm = double.tryParse(_workingMaxCtrl[ex]?.text ?? '') ?? 0;
-                                if (pct != null && wm > 0 && wList.length > i) {
-                                  setState(() {
+                                setState(() {
+                                  if (pct != null && wm > 0 && wList.length > i) {
                                     wList[i].text = (pct / 100 * wm).roundToDouble().toStringAsFixed(0);
-                                  });
-                                }
+                                  }
+                                  for (int j = i + 1; j < pList.length; j++) {
+                                    pList[j].text = v;
+                                    if (pct != null && wm > 0 && wList.length > j) {
+                                      wList[j].text = (pct / 100 * wm).roundToDouble().toStringAsFixed(0);
+                                    }
+                                  }
+                                });
                               },
                               decoration: const InputDecoration(
                                 isDense: true, border: OutlineInputBorder(),
@@ -6421,6 +6443,11 @@ Widget _buildSetsTable(BuildContext context, ProgramExercise ex, {bool showStatu
                             controller: wList[i],
                             keyboardType: const TextInputType.numberWithOptions(decimal: true),
                             textAlign: TextAlign.center,
+                            onChanged: (v) => setState(() {
+                              for (int j = i + 1; j < wList.length; j++) {
+                                wList[j].text = v;
+                              }
+                            }),
                             decoration: const InputDecoration(
                               isDense: true, border: OutlineInputBorder(),
                               contentPadding: EdgeInsets.symmetric(vertical: 6, horizontal: 4),
@@ -6682,9 +6709,26 @@ Widget _buildSetsTable(BuildContext context, ProgramExercise ex, {bool showStatu
     switch (step.kind) {
       case _FlowStepKind.warmUp: return 'Warm Up';
       case _FlowStepKind.mainItem:
-        final mainSteps = _steps.where((s) => s.kind == _FlowStepKind.mainItem).toList();
-        final idx = mainSteps.indexWhere((s) => s == _steps[_stepIndex]);
-        return 'Exercise ${idx + 1} of ${mainSteps.length}';
+        final exs = step.items.first;
+        final ex = exs.first;
+        final name = exs.length == 1 ? ex.name : null;
+        if (ex.groupType == 'emom' || ex.groupType == 'emomStrength') {
+          final interval = ex.groupIntervalMin ?? 2;
+          final sec = ex.groupIntervalSec ?? 0;
+          final totalSets = ex.groupTotalSets ?? ex.sets.length;
+          final intervalLabel = sec > 0 ? '$interval:${sec.toString().padLeft(2, '0')}' : '$interval';
+          final label = 'E${intervalLabel}MOM x $totalSets sets';
+          return name != null ? '$name: $label' : label;
+        }
+        if (ex.groupType == 'amrap') {
+          final cap = ex.groupTotalSets ?? 0;
+          final label = 'AMRAP ${cap}min';
+          return name != null ? '$name: $label' : label;
+        }
+        // Standalone
+        final sets = ex.sets.length;
+        final reps = ex.sets.isNotEmpty ? ex.sets.first.reps : 0;
+        return '${ex.name}: ${sets}x$reps';
       case _FlowStepKind.coolDown: return 'Cool Down';
       case _FlowStepKind.done: return 'Complete';
     }
