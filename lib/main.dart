@@ -6183,35 +6183,44 @@ Widget _buildSetsTable(BuildContext context, ProgramExercise ex, {bool showStatu
     final sList = _statusMap[ex];
     if (sList == null || i >= sList.length) return const SizedBox.shrink();
     final status = sList[i];
+    if (status == SetStatus.missed) {
+      return Row(mainAxisSize: MainAxisSize.min, children: [
+        const SizedBox(width: 6),
+        Container(
+          width: 28, height: 28,
+          decoration: BoxDecoration(color: Colors.red, borderRadius: BorderRadius.circular(6)),
+          child: const Icon(Icons.close, size: 14, color: Colors.white),
+        ),
+        const SizedBox(width: 32),
+      ]);
+    }
+    if (status == SetStatus.succeeded) {
+      return Row(mainAxisSize: MainAxisSize.min, children: [
+        const SizedBox(width: 38),
+        Container(
+          width: 28, height: 28,
+          decoration: BoxDecoration(color: Colors.green, borderRadius: BorderRadius.circular(6)),
+          child: const Icon(Icons.check, size: 14, color: Colors.white),
+        ),
+      ]);
+    }
     return Row(mainAxisSize: MainAxisSize.min, children: [
       const SizedBox(width: 6),
       GestureDetector(
-        onTap: () => setState(() {
-          sList[i] = status == SetStatus.missed ? SetStatus.none : SetStatus.missed;
-        }),
+        onTap: () => setState(() { sList[i] = SetStatus.missed; }),
         child: Container(
           width: 28, height: 28,
-          decoration: BoxDecoration(
-            color: status == SetStatus.missed ? Colors.red : Colors.white10,
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Icon(Icons.close, size: 14,
-              color: status == SetStatus.missed ? Colors.white : Colors.white38),
+          decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(6)),
+          child: const Icon(Icons.close, size: 14, color: Colors.white38),
         ),
       ),
       const SizedBox(width: 4),
       GestureDetector(
-        onTap: () => setState(() {
-          sList[i] = status == SetStatus.succeeded ? SetStatus.none : SetStatus.succeeded;
-        }),
+        onTap: () => setState(() { sList[i] = SetStatus.succeeded; }),
         child: Container(
           width: 28, height: 28,
-          decoration: BoxDecoration(
-            color: status == SetStatus.succeeded ? Colors.green : Colors.white10,
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Icon(Icons.check, size: 14,
-              color: status == SetStatus.succeeded ? Colors.white : Colors.white38),
+          decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(6)),
+          child: const Icon(Icons.check, size: 14, color: Colors.white38),
         ),
       ),
     ]);
