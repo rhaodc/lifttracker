@@ -350,6 +350,7 @@ class ProgramSet {
   double? weight;
   String unit;
   double? rpe;
+  double? pct; // percent of working max (emomStrength)
   SetStatus status;
 
   ProgramSet({
@@ -357,6 +358,7 @@ class ProgramSet {
     this.weight,
     this.unit = 'lbs',
     this.rpe,
+    this.pct,
     this.status = SetStatus.none,
   });
 
@@ -365,6 +367,7 @@ class ProgramSet {
         if (weight != null) 'weight': weight,
         'unit': unit,
         if (rpe != null) 'rpe': rpe,
+        if (pct != null) 'pct': pct,
         'status': status.name,
       };
 
@@ -373,6 +376,7 @@ class ProgramSet {
         weight: (j['weight'] as num?)?.toDouble(),
         unit: j['unit'] as String? ?? 'lbs',
         rpe: (j['rpe'] as num?)?.toDouble(),
+        pct: (j['pct'] as num?)?.toDouble(),
         status: SetStatus.values.firstWhere(
           (s) => s.name == (j['status'] as String? ?? 'none'),
           orElse: () => SetStatus.none,
@@ -383,13 +387,36 @@ class ProgramSet {
 class ProgramExercise {
   String name;
   List<ProgramSet> sets;
+  String block; // 'warmUp', 'main', or 'coolDown'
+  String? groupId;         // exercises sharing a groupId form an EMOM/AMRAP group
+  String? groupType;       // 'emom', 'emomStrength', or 'amrap'
+  int? groupIntervalMin;   // EMOM: minutes per interval
+  int? groupTotalSets;     // EMOM: total sets; AMRAP: time cap in minutes
+  double? groupWorkingMax; // emomStrength: working max in lbs
+  bool completed;          // true when user marks this exercise/group as done
 
-  ProgramExercise({required this.name, List<ProgramSet>? sets})
-      : sets = sets ?? [];
+  ProgramExercise({
+    required this.name,
+    List<ProgramSet>? sets,
+    this.block = 'main',
+    this.groupId,
+    this.groupType,
+    this.groupIntervalMin,
+    this.groupTotalSets,
+    this.groupWorkingMax,
+    this.completed = false,
+  }) : sets = sets ?? [];
 
   Map<String, dynamic> toJson() => {
         'name': name,
         'sets': sets.map((s) => s.toJson()).toList(),
+        'block': block,
+        if (groupId != null) 'groupId': groupId,
+        if (groupType != null) 'groupType': groupType,
+        if (groupIntervalMin != null) 'groupIntervalMin': groupIntervalMin,
+        if (groupTotalSets != null) 'groupTotalSets': groupTotalSets,
+        if (groupWorkingMax != null) 'groupWorkingMax': groupWorkingMax,
+        if (completed) 'completed': completed,
       };
 
   factory ProgramExercise.fromJson(Map<String, dynamic> j) => ProgramExercise(
@@ -397,19 +424,34 @@ class ProgramExercise {
         sets: (j['sets'] as List<dynamic>? ?? [])
             .map((e) => ProgramSet.fromJson(e as Map<String, dynamic>))
             .toList(),
+        block: j['block'] as String? ?? 'main',
+        groupId: j['groupId'] as String?,
+        groupType: j['groupType'] as String?,
+        groupIntervalMin: j['groupIntervalMin'] as int?,
+        groupTotalSets: j['groupTotalSets'] as int?,
+        groupWorkingMax: (j['groupWorkingMax'] as num?)?.toDouble(),
+        completed: j['completed'] as bool? ?? false,
       );
 }
 
 class ProgramDay {
   DateTime date;
   List<ProgramExercise> exercises;
+  bool completed;
+  String? notes;
 
-  ProgramDay({required this.date, List<ProgramExercise>? exercises})
-      : exercises = exercises ?? [];
+  ProgramDay({
+    required this.date,
+    List<ProgramExercise>? exercises,
+    this.completed = false,
+    this.notes,
+  }) : exercises = exercises ?? [];
 
   Map<String, dynamic> toJson() => {
         'date': date.toIso8601String(),
         'exercises': exercises.map((e) => e.toJson()).toList(),
+        if (completed) 'completed': completed,
+        if (notes != null && notes!.isNotEmpty) 'notes': notes,
       };
 
   factory ProgramDay.fromJson(Map<String, dynamic> j) => ProgramDay(
@@ -417,6 +459,8 @@ class ProgramDay {
         exercises: (j['exercises'] as List<dynamic>? ?? [])
             .map((e) => ProgramExercise.fromJson(e as Map<String, dynamic>))
             .toList(),
+        completed: j['completed'] as bool? ?? false,
+        notes: j['notes'] as String?,
       );
 }
 
@@ -1374,6 +1418,20 @@ class _HomeScreenState extends State<HomeScreen>
                 widget.onChanged();
               },
             ),
+          if (isOwn)
+            IconButton(
+              icon: const Icon(Icons.logout),
+              tooltip: 'Log Out',
+              onPressed: () async {
+                final prefs = await SharedPreferences.getInstance();
+                await prefs.remove('currentUserId');
+                await prefs.remove('currentUserName');
+                if (!context.mounted) return;
+                Navigator.of(context).pushReplacement(
+                  MaterialPageRoute(builder: (_) => const SignInScreen()),
+                );
+              },
+            ),
         ],
         bottom: TabBar(
           controller: _tabController,
@@ -1878,143 +1936,124 @@ class _HomeScreenState extends State<HomeScreen>
                   child: Card(
                     child: Padding(
                       padding: const EdgeInsets.all(16),
-                      child: Row(
+                      child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
                         children: [
-                          // Left: goals list
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Row(
-                                  children: [
-                                    Icon(Icons.flag_outlined,
-                                        size: 13,
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .primary),
-                                    const SizedBox(width: 4),
-                                    const Expanded(
-                                      child: Text('Goals',
-                                          style: TextStyle(
-                                              fontSize: 11,
-                                              color: Colors.white54)),
-                                    ),
-                                    GestureDetector(
-                                      onTap: _addGoal,
-                                      child: Icon(Icons.add_circle_outline,
-                                          size: 16,
-                                          color: Theme.of(context)
-                                              .colorScheme
-                                              .primary),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 6),
-                                if (widget.profile.goals.isEmpty)
-                                  const Text('Tap + to add',
-                                      style: TextStyle(
-                                          fontSize: 11,
-                                          color: Colors.white38))
-                                else
-                                  ...widget.profile.goals.asMap().entries.map(
-                                        (e) => Padding(
-                                          padding:
-                                              const EdgeInsets.only(bottom: 5),
-                                          child: Row(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: [
-                                              const Text('• ',
-                                                  style: TextStyle(
-                                                      fontSize: 12,
-                                                      color: Colors.white60)),
-                                              Expanded(
-                                                child: Text(e.value,
-                                                    style: const TextStyle(
-                                                        fontSize: 12,
-                                                        color: Colors.white70)),
-                                              ),
-                                              GestureDetector(
-                                                onTap: () =>
-                                                    _removeGoal(e.key),
-                                                child: const Icon(Icons.close,
-                                                    size: 12,
-                                                    color: Colors.white30),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      ),
-                              ],
-                            ),
+                          Row(
+                            children: [
+                              Icon(Icons.flag_outlined,
+                                  size: 13,
+                                  color: Theme.of(context).colorScheme.primary),
+                              const SizedBox(width: 4),
+                              const Expanded(
+                                child: Text('Goals',
+                                    style: TextStyle(
+                                        fontSize: 11, color: Colors.white54)),
+                              ),
+                              GestureDetector(
+                                onTap: _addGoal,
+                                child: Icon(Icons.add_circle_outline,
+                                    size: 16,
+                                    color: Theme.of(context).colorScheme.primary),
+                              ),
+                            ],
                           ),
-                          const SizedBox(width: 12),
-                          // Divider
-                          Container(width: 1, height: 70, color: Colors.white12),
-                          const SizedBox(width: 12),
-                          // Right: workouts this week big display (centered)
-                          GestureDetector(
-                            onTap: _editWeeklyGoal,
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: CrossAxisAlignment.center,
-                              children: [
-                                RichText(
-                                  text: TextSpan(
-                                    children: [
-                                      TextSpan(
-                                        text: '${_workoutsThisWeek()}',
-                                        style: TextStyle(
-                                          fontSize: 42,
-                                          fontWeight: FontWeight.bold,
-                                          color: _workoutsThisWeek() >=
-                                                  widget.profile.weeklyWorkoutGoal
-                                              ? Colors.greenAccent
-                                              : Theme.of(context)
-                                                  .colorScheme
-                                                  .primary,
-                                          height: 1,
+                          const SizedBox(height: 6),
+                          if (widget.profile.goals.isEmpty)
+                            const Text('Tap + to add',
+                                style: TextStyle(
+                                    fontSize: 11, color: Colors.white38))
+                          else
+                            ...widget.profile.goals.asMap().entries.map(
+                                  (e) => Padding(
+                                    padding: const EdgeInsets.only(bottom: 5),
+                                    child: Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        const Text('• ',
+                                            style: TextStyle(
+                                                fontSize: 12,
+                                                color: Colors.white60)),
+                                        Expanded(
+                                          child: Text(e.value,
+                                              style: const TextStyle(
+                                                  fontSize: 12,
+                                                  color: Colors.white70)),
                                         ),
-                                      ),
-                                      TextSpan(
-                                        text: '/${widget.profile.weeklyWorkoutGoal}',
-                                        style: const TextStyle(
-                                          fontSize: 20,
-                                          fontWeight: FontWeight.w500,
-                                          color: Colors.white38,
-                                          height: 1,
+                                        GestureDetector(
+                                          onTap: () => _removeGoal(e.key),
+                                          child: const Icon(Icons.close,
+                                              size: 12, color: Colors.white30),
                                         ),
-                                      ),
-                                    ],
+                                      ],
+                                    ),
                                   ),
                                 ),
-                                const SizedBox(height: 4),
-                                Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    const Icon(Icons.fitness_center,
-                                        size: 11, color: Colors.white38),
-                                    const SizedBox(width: 3),
-                                    const Text('this week',
-                                        style: TextStyle(
-                                            fontSize: 11,
-                                            color: Colors.white38)),
-                                    const SizedBox(width: 3),
-                                    const Icon(Icons.edit,
-                                        size: 10, color: Colors.white24),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
                         ],
                       ),
                     ),
                   ),
                 ),
               ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          // Weekly workout goal card
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+              child: Row(
+                children: [
+                  Icon(Icons.calendar_today_outlined,
+                      size: 16,
+                      color: Theme.of(context).colorScheme.primary),
+                  const SizedBox(width: 8),
+                  const Text('Weekly Workouts',
+                      style: TextStyle(fontSize: 13, color: Colors.white54)),
+                  const Spacer(),
+                  GestureDetector(
+                    onTap: _editWeeklyGoal,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.baseline,
+                      textBaseline: TextBaseline.alphabetic,
+                      children: [
+                        RichText(
+                          text: TextSpan(
+                            children: [
+                              TextSpan(
+                                text: '${_workoutsThisWeek()}',
+                                style: TextStyle(
+                                  fontSize: 42,
+                                  fontWeight: FontWeight.bold,
+                                  color: _workoutsThisWeek() >=
+                                          widget.profile.weeklyWorkoutGoal
+                                      ? Colors.greenAccent
+                                      : Theme.of(context).colorScheme.primary,
+                                  height: 1,
+                                ),
+                              ),
+                              TextSpan(
+                                text: '/${widget.profile.weeklyWorkoutGoal}',
+                                style: const TextStyle(
+                                  fontSize: 22,
+                                  fontWeight: FontWeight.w500,
+                                  color: Colors.white38,
+                                  height: 1,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        const Icon(Icons.edit, size: 12, color: Colors.white24),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
           const SizedBox(height: 20),
@@ -3256,129 +3295,137 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
                 const SizedBox(width: 8),
               ],
       ),
-      body: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // Date
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-            child: OutlinedButton.icon(
-              icon: const Icon(Icons.calendar_today_outlined, size: 18),
-              label: Text(_fmt(_date)),
-              onPressed: _pickDate,
-              style: OutlinedButton.styleFrom(alignment: Alignment.centerLeft),
-            ),
-          ),
-          // Workout type dropdown (hidden for planned strength — shown in AppBar)
-          if (!(widget.editingWorkout != null &&
-              !widget.editingWorkout!.completed &&
-              _type == WorkoutType.strength))
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.only(bottom: 100),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Date
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
-              child: DropdownButtonFormField<WorkoutType>(
-                initialValue: _type,
-                decoration: const InputDecoration(
-                  labelText: 'Type',
-                  border: OutlineInputBorder(),
-                  contentPadding:
-                      EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                ),
-                items: WorkoutType.values
-                    .map((t) => DropdownMenuItem(
-                          value: t,
-                          child: Text(t.label),
-                        ))
-                    .toList(),
-                onChanged: (t) {
-                  if (t != null) setState(() => _type = t);
-                },
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+              child: OutlinedButton.icon(
+                icon: const Icon(Icons.calendar_today_outlined, size: 18),
+                label: Text(_fmt(_date)),
+                onPressed: _pickDate,
+                style: OutlinedButton.styleFrom(alignment: Alignment.centerLeft),
               ),
             ),
-          // Time field (functional workouts only)
-          if (_type != WorkoutType.strength)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
-              child: TextField(
-                controller: _timeCtrl,
-                keyboardType: TextInputType.number,
-                decoration: InputDecoration(
-                  labelText: _timeLabel,
-                  border: const OutlineInputBorder(),
-                  suffixText: 'min',
-                ),
-              ),
-            ),
-          // Exercise list
-          Expanded(
-            child: _exercises.isEmpty
-                ? const Center(
-                    child: Text(
-                      'No exercises yet.\nTap + to add exercises.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 16, color: Colors.white54),
-                    ),
-                  )
-                : ListView.separated(
-                    padding: const EdgeInsets.all(16),
-                    itemCount: _exercises.length,
-                    separatorBuilder: (_, _) => const SizedBox(height: 12),
-                    itemBuilder: (_, i) => _type == WorkoutType.strength
-                        ? _buildStrengthCard(_exercises[i], i)
-                        : _buildFunctionalCard(_exercises[i], i),
+            // Workout type dropdown (hidden for planned strength — shown in AppBar)
+            if (!(widget.editingWorkout != null &&
+                !widget.editingWorkout!.completed &&
+                _type == WorkoutType.strength))
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+                child: DropdownButtonFormField<WorkoutType>(
+                  initialValue: _type,
+                  decoration: const InputDecoration(
+                    labelText: 'Type',
+                    border: OutlineInputBorder(),
+                    contentPadding:
+                        EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                   ),
-          ),
-          // Result field (functional workouts) — below exercises
-          if (_type == WorkoutType.amrap)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _amrapRoundsCtrl,
-                      keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(
-                        labelText: 'Rounds',
-                        border: OutlineInputBorder(),
+                  items: WorkoutType.values
+                      .map((t) => DropdownMenuItem(
+                            value: t,
+                            child: Text(t.label),
+                          ))
+                      .toList(),
+                  onChanged: (t) {
+                    if (t != null) setState(() => _type = t);
+                  },
+                ),
+              ),
+            // Time field (functional workouts only)
+            if (_type != WorkoutType.strength)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+                child: TextField(
+                  controller: _timeCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: InputDecoration(
+                    labelText: _timeLabel,
+                    border: const OutlineInputBorder(),
+                    suffixText: 'min',
+                  ),
+                ),
+              ),
+            // Exercise list
+            if (_exercises.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 48),
+                child: Center(
+                  child: Text(
+                    'No exercises yet.\nTap + to add exercises.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 16, color: Colors.white54),
+                  ),
+                ),
+              )
+            else
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  children: [
+                    for (int i = 0; i < _exercises.length; i++) ...[
+                      if (i > 0) const SizedBox(height: 12),
+                      _type == WorkoutType.strength
+                          ? _buildStrengthCard(_exercises[i], i)
+                          : _buildFunctionalCard(_exercises[i], i),
+                    ],
+                  ],
+                ),
+              ),
+            // Result field (functional workouts) — below exercises
+            if (_type == WorkoutType.amrap)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _amrapRoundsCtrl,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                          labelText: 'Rounds',
+                          border: OutlineInputBorder(),
+                        ),
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: TextField(
-                      controller: _amrapRepsCtrl,
-                      keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(
-                        labelText: 'Reps',
-                        border: OutlineInputBorder(),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: TextField(
+                        controller: _amrapRepsCtrl,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                          labelText: 'Reps',
+                          border: OutlineInputBorder(),
+                        ),
                       ),
                     ),
+                  ],
+                ),
+              )
+            else if (_type != WorkoutType.strength)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+                child: TextField(
+                  controller: _resultCtrl,
+                  decoration: InputDecoration(
+                    labelText: switch (_type) {
+                      WorkoutType.emom => 'Completed?',
+                      WorkoutType.forTime => 'Completion Time',
+                      _ => 'Result',
+                    },
+                    hintText: switch (_type) {
+                      WorkoutType.emom => 'e.g. Yes / 8 of 10 rounds',
+                      WorkoutType.forTime => 'e.g. 12:34',
+                      _ => '',
+                    },
+                    border: const OutlineInputBorder(),
                   ),
-                ],
-              ),
-            )
-          else if (_type != WorkoutType.strength)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-              child: TextField(
-                controller: _resultCtrl,
-                decoration: InputDecoration(
-                  labelText: switch (_type) {
-                    WorkoutType.emom => 'Completed?',
-                    WorkoutType.forTime => 'Completion Time',
-                    _ => 'Result',
-                  },
-                  hintText: switch (_type) {
-                    WorkoutType.emom => 'e.g. Yes / 8 of 10 rounds',
-                    WorkoutType.forTime => 'e.g. 12:34',
-                    _ => '',
-                  },
-                  border: const OutlineInputBorder(),
                 ),
               ),
-            ),
-          // Comments + Complete button for planned strength execution
-          if (isPlannedStrength) ...[
+            // Comments box — always shown
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
               child: TextField(
@@ -3392,17 +3439,19 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
                 ),
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-              child: Center(
-                child: FilledButton(
-                  onPressed: _exercises.isNotEmpty ? _save : null,
-                  child: const Text('Complete', style: TextStyle(fontSize: 16)),
+            // Complete button — only for planned strength execution
+            if (isPlannedStrength)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                child: Center(
+                  child: FilledButton(
+                    onPressed: _exercises.isNotEmpty ? _save : null,
+                    child: const Text('Complete', style: TextStyle(fontSize: 16)),
+                  ),
                 ),
               ),
-            ),
           ],
-        ],
+        ),
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _openExercisePicker,
@@ -3901,6 +3950,12 @@ class _ProgramTabViewState extends State<_ProgramTabView> {
     _refreshWorkouts();
   }
 
+  @override
+  void didUpdateWidget(_ProgramTabView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _refreshWorkouts();
+  }
+
   void _refreshWorkouts() {
     _sortedWorkouts = widget.profile.workouts
         .where((w) => _sameDay(w.date, _selectedDay))
@@ -3922,107 +3977,28 @@ class _ProgramTabViewState extends State<_ProgramTabView> {
     }
   }
 
-  void _addExercises() async {
-    final liftNames = widget.profile.lifts.map((l) => l.name).toList();
-    final selected = <String>{};
-    final customCtrl = TextEditingController();
-
-    await showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDlg) => AlertDialog(
-          title: const Text('Add Exercises'),
-          content: SizedBox(
-            width: double.maxFinite,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (liftNames.isNotEmpty) ...[
-                  SizedBox(
-                    height: 200,
-                    child: ListView(
-                      children: liftNames.map((name) => CheckboxListTile(
-                        title: Text(name),
-                        value: selected.contains(name),
-                        onChanged: (v) => setDlg(() {
-                          if (v == true) { selected.add(name); }
-                          else { selected.remove(name); }
-                        }),
-                        dense: true,
-                        contentPadding: EdgeInsets.zero,
-                      )).toList(),
-                    ),
-                  ),
-                  const Divider(),
-                ],
-                Row(children: [
-                  Expanded(
-                    child: TextField(
-                      controller: customCtrl,
-                      decoration: const InputDecoration(
-                        hintText: 'Custom exercise…',
-                        isDense: true,
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  IconButton(
-                    icon: const Icon(Icons.add),
-                    onPressed: () {
-                      final t = customCtrl.text.trim();
-                      if (t.isNotEmpty) {
-                        setDlg(() => selected.add(t));
-                        customCtrl.clear();
-                      }
-                    },
-                  ),
-                ]),
-                if (selected.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 4,
-                    children: selected.map((s) => Chip(
-                      label: Text(s, style: const TextStyle(fontSize: 12)),
-                      onDeleted: () => setDlg(() => selected.remove(s)),
-                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    )).toList(),
-                  ),
-                ],
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-            FilledButton(
-              onPressed: selected.isEmpty ? null : () {
-                Navigator.pop(ctx);
-                _addExercisesToDay(selected.toList());
-              },
-              child: const Text('Add'),
-            ),
-          ],
+  void _addExercises() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => AddProgramScreen(
+          date: _selectedDay,
+          profile: widget.profile,
+          existingDay: _dayData(_selectedDay),
+          onSaved: (day) {
+            setState(() {
+              widget.profile.program.removeWhere(
+                  (d) => d.date.year == _selectedDay.year &&
+                      d.date.month == _selectedDay.month &&
+                      d.date.day == _selectedDay.day);
+              widget.profile.program.add(day);
+            });
+            widget.onChanged();
+          },
+          onWorkoutLogged: widget.onChanged,
         ),
       ),
     );
-    customCtrl.dispose();
-  }
-
-  void _addExercisesToDay(List<String> names) {
-    setState(() {
-      var day = _dayData(_selectedDay);
-      if (day == null) {
-        day = ProgramDay(date: _selectedDay);
-        widget.profile.program.add(day);
-      }
-      for (final name in names) {
-        day.exercises.add(ProgramExercise(
-          name: name,
-          sets: [ProgramSet(), ProgramSet(), ProgramSet()],
-        ));
-      }
-    });
-    widget.onChanged();
   }
 
 
@@ -4161,67 +4137,143 @@ class _ProgramTabViewState extends State<_ProgramTabView> {
                       style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                 ),
               ),
-              // Programmed exercises
-              if (exercises.isEmpty)
+              // Programmed exercises — shown as a single card
+              if (dayData == null || exercises.isEmpty)
                 const SliverToBoxAdapter(
                   child: Padding(
                     padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
-                    child: Text('No exercises programmed for this day.',
+                    child: Text('No program for this day.',
                         style: TextStyle(color: Colors.white54, fontSize: 13)),
                   ),
                 )
               else
                 SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
-                  sliver: SliverList(
-                    delegate: SliverChildBuilderDelegate(
-                      (_, i) {
-                        final ex = exercises[i];
-                        final done = ex.sets.where((s) => s.status == SetStatus.succeeded).length;
-                        final missed = ex.sets.where((s) => s.status == SetStatus.missed).length;
-                        return Dismissible(
-                          key: Key('prog_${_selectedDay.toIso8601String()}_$i'),
-                          direction: DismissDirection.endToStart,
-                          background: _dismissBackground(),
-                          onDismissed: (_) {
-                            setState(() {
-                              dayData!.exercises.removeAt(i);
-                              if (dayData.exercises.isEmpty) {
-                                widget.profile.program.remove(dayData);
-                              }
-                            });
-                            widget.onChanged();
-                          },
-                          child: Card(
-                            margin: const EdgeInsets.only(bottom: 8),
-                            child: ListTile(
-                              title: Text(ex.name,
-                                  style: const TextStyle(fontWeight: FontWeight.w600)),
-                              subtitle: Text(
-                                '${ex.sets.length} set${ex.sets.length == 1 ? '' : 's'}'
-                                '${done > 0 ? '  ✓$done' : ''}${missed > 0 ? '  ✗$missed' : ''}',
-                                style: const TextStyle(fontSize: 12, color: Colors.white54),
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                  sliver: SliverToBoxAdapter(
+                    child: Dismissible(
+                      key: Key('prog_${_selectedDay.toIso8601String()}'),
+                      direction: DismissDirection.endToStart,
+                      background: _dismissBackground(),
+                      onDismissed: (_) {
+                        setState(() {
+                          widget.profile.program.remove(dayData);
+                        });
+                        widget.onChanged();
+                      },
+                      child: Card(
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(12),
+                          onTap: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => AddProgramScreen(
+                                date: _selectedDay,
+                                profile: widget.profile,
+                                existingDay: dayData,
+                                onSaved: (updatedDay) {
+                                  setState(() {
+                                    widget.profile.program.removeWhere(
+                                        (d) => d.date.year == updatedDay.date.year &&
+                                            d.date.month == updatedDay.date.month &&
+                                            d.date.day == updatedDay.date.day);
+                                    widget.profile.program.add(updatedDay);
+                                  });
+                                  widget.onChanged();
+                                },
+                                onWorkoutLogged: widget.onChanged,
                               ),
-                              trailing: const Icon(Icons.chevron_right, color: Colors.white54),
-                              onTap: () async {
-                                await Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => ProgramExerciseScreen(
-                                      exercise: ex,
-                                      onChanged: () {
-                                        setState(() {});
-                                        widget.onChanged();
-                                      },
-                                    ),
-                                  ),
-                                );
-                              },
                             ),
                           ),
-                        );
-                      },
-                      childCount: exercises.length,
+                          child: Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(children: [
+                                  Icon(
+                                    dayData.completed ? Icons.check_circle : Icons.view_list_outlined,
+                                    size: 16,
+                                    color: dayData.completed
+                                        ? Colors.green.shade400
+                                        : Theme.of(context).colorScheme.primary,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  const Text('Program',
+                                      style: TextStyle(
+                                          fontSize: 15, fontWeight: FontWeight.bold)),
+                                  if (dayData.completed) ...[
+                                    const SizedBox(width: 8),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: Colors.green.shade900.withValues(alpha: 0.5),
+                                        borderRadius: BorderRadius.circular(10),
+                                        border: Border.all(color: Colors.green.shade800),
+                                      ),
+                                      child: Text('Completed',
+                                          style: TextStyle(fontSize: 11, color: Colors.green.shade400,
+                                              fontWeight: FontWeight.w600)),
+                                    ),
+                                  ],
+                                  const Spacer(),
+                                  const Icon(Icons.chevron_right, color: Colors.white38),
+                                ]),
+                                const SizedBox(height: 10),
+                                ...[
+                                  ('Warm Up', exercises.where((e) => e.block == 'warmUp').toList()),
+                                  ('Main', exercises.where((e) => e.block == 'main').toList()),
+                                  ('Cool Down', exercises.where((e) => e.block == 'coolDown').toList()),
+                                ].where((b) => b.$2.isNotEmpty).map((b) => Padding(
+                                  padding: const EdgeInsets.only(bottom: 6),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(b.$1,
+                                          style: const TextStyle(
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w600,
+                                              color: Colors.white54)),
+                                      const SizedBox(height: 3),
+                                      Wrap(
+                                        spacing: 6,
+                                        runSpacing: 4,
+                                        children: b.$2
+                                            .map((ex) => Container(
+                                                  padding: const EdgeInsets.symmetric(
+                                                      horizontal: 8, vertical: 3),
+                                                  decoration: BoxDecoration(
+                                                    color: ex.completed
+                                                        ? Colors.green.shade900.withValues(alpha: 0.4)
+                                                        : Theme.of(context)
+                                                            .colorScheme
+                                                            .primaryContainer
+                                                            .withValues(alpha: 0.3),
+                                                    borderRadius: BorderRadius.circular(6),
+                                                    border: ex.completed
+                                                        ? Border.all(color: Colors.green.shade800)
+                                                        : null,
+                                                  ),
+                                                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                                                    if (ex.completed) ...[
+                                                      Icon(Icons.check, size: 11, color: Colors.green.shade400),
+                                                      const SizedBox(width: 3),
+                                                    ],
+                                                    Text(ex.name,
+                                                        style: TextStyle(
+                                                            fontSize: 12,
+                                                            color: ex.completed ? Colors.green.shade300 : null)),
+                                                  ]),
+                                                ))
+                                            .toList(),
+                                      ),
+                                    ],
+                                  ),
+                                )),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
                     ),
                   ),
                 ),
@@ -4385,13 +4437,2320 @@ class _ProgramTabViewState extends State<_ProgramTabView> {
                 child: FilledButton.icon(
                   icon: const Icon(Icons.fitness_center),
                   label: const Text('Add Workout'),
-                  onPressed: widget.onAddWorkout,
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => WorkoutScreen(
+                        profile: widget.profile,
+                        onSaved: () {
+                          setState(() => _refreshWorkouts());
+                          widget.onChanged();
+                        },
+                      ),
+                    ),
+                  ),
                 ),
               ),
             ],
           ),
         ),
       ],
+    );
+  }
+}
+
+// ─── Program Section Item (strength exercise or EMOM/AMRAP group) ────────────
+
+class _ProgGroup {
+  static int _counter = 0;
+  final String id = 'g_${_counter++}';
+  final String type; // 'emom' or 'amrap'
+  final List<ProgramExercise> exercises;
+  final TextEditingController intervalMinCtrl;
+  final TextEditingController totalSetsCtrl; // EMOM: total intervals; AMRAP: time cap
+
+  // Per-exercise controllers
+  final Map<ProgramExercise, TextEditingController> nameCtrl = {};
+  final Map<ProgramExercise, TextEditingController> repsCtrl = {};
+  final Map<ProgramExercise, TextEditingController> weightCtrl = {};
+  final Map<ProgramExercise, TextEditingController> rpeCtrl = {};
+  final Map<ProgramExercise, String> repOrTimeMode = {}; // 'reps' or 'time' per exercise
+
+  // Per-set controllers for single-exercise EMOM (one controller per set/minute)
+  final Map<ProgramExercise, List<TextEditingController>> perSetRepsCtrl = {};
+  final Map<ProgramExercise, List<TextEditingController>> perSetWeightCtrl = {};
+  final Map<ProgramExercise, List<TextEditingController>> perSetRpeCtrl = {};
+
+  final TextEditingController workingMaxCtrl; // emomStrength only
+
+  // Per-exercise percent controllers (emomStrength multi-exercise)
+  final Map<ProgramExercise, TextEditingController> pctCtrl = {};
+  // Per-set percent controllers (emomStrength single-exercise)
+  final Map<ProgramExercise, List<TextEditingController>> perSetPctCtrl = {};
+
+  _ProgGroup({
+    required this.type,
+    required this.exercises,
+    String intervalMin = '1',
+    String totalSets = '6',
+    String workingMax = '',
+  })  : intervalMinCtrl = TextEditingController(text: intervalMin),
+        totalSetsCtrl = TextEditingController(text: totalSets),
+        workingMaxCtrl = TextEditingController(text: workingMax) {
+    for (final ex in exercises) { _initExCtrl(ex); }
+  }
+
+  void _initExCtrl(ProgramExercise ex) {
+    nameCtrl[ex] = TextEditingController(text: ex.name);
+    pctCtrl[ex] = TextEditingController();
+    repOrTimeMode[ex] = 'reps';
+    repsCtrl[ex] = TextEditingController(
+        text: ex.sets.isNotEmpty ? ex.sets.first.reps.toString() : '10');
+    weightCtrl[ex] = TextEditingController(
+        text: ex.sets.isNotEmpty && ex.sets.first.weight != null
+            ? ex.sets.first.weight!.toInt().toString()
+            : '');
+    rpeCtrl[ex] = TextEditingController(
+        text: ex.sets.isNotEmpty && ex.sets.first.rpe != null
+            ? ex.sets.first.rpe!.toStringAsFixed(1)
+            : '');
+  }
+
+  void addExercise(ProgramExercise ex) {
+    exercises.add(ex);
+    _initExCtrl(ex);
+  }
+
+  /// Grows or shrinks per-set controller lists to [count] for single-exercise EMOM.
+  void syncSetControllers(ProgramExercise ex, int count) {
+    final rList = perSetRepsCtrl.putIfAbsent(ex, () => []);
+    final wList = perSetWeightCtrl.putIfAbsent(ex, () => []);
+    final eList = perSetRpeCtrl.putIfAbsent(ex, () => []);
+    final pList = perSetPctCtrl.putIfAbsent(ex, () => []);
+    while (rList.length < count) {
+      rList.add(TextEditingController(text: repsCtrl[ex]?.text ?? '10'));
+      wList.add(TextEditingController(text: weightCtrl[ex]?.text ?? ''));
+      eList.add(TextEditingController());
+      pList.add(TextEditingController());
+    }
+    while (rList.length > count) {
+      rList.removeLast().dispose();
+      wList.removeLast().dispose();
+      eList.removeLast().dispose();
+      pList.removeLast().dispose();
+    }
+  }
+
+  void flush() {
+    final intervalMin = int.tryParse(intervalMinCtrl.text) ?? 1;
+    final totalSets = int.tryParse(totalSetsCtrl.text) ?? 6;
+    final workingMax = double.tryParse(workingMaxCtrl.text);
+    final isSingleExEmom = (type == 'emom' || type == 'emomStrength') && exercises.length == 1;
+    for (final ex in exercises) {
+      final isTime = repOrTimeMode[ex] == 'time';
+      final nameText = nameCtrl[ex]?.text.trim() ?? '';
+      if (nameText.isNotEmpty) ex.name = nameText;
+      ex.groupWorkingMax = workingMax;
+      if (isSingleExEmom && perSetRepsCtrl[ex] != null && perSetRepsCtrl[ex]!.isNotEmpty) {
+        ex.sets = List.generate(perSetRepsCtrl[ex]!.length, (i) => ProgramSet(
+          reps: int.tryParse(perSetRepsCtrl[ex]![i].text) ?? 10,
+          weight: isTime ? null : double.tryParse(perSetWeightCtrl[ex]![i].text),
+          unit: 'lbs',
+          rpe: isTime ? double.tryParse(perSetRpeCtrl[ex]![i].text) : null,
+          pct: double.tryParse(perSetPctCtrl[ex]?[i].text ?? ''),
+        ));
+      } else {
+        ex.sets = [
+          ProgramSet(
+            reps: int.tryParse(repsCtrl[ex]?.text ?? '10') ?? 10,
+            weight: isTime ? null : double.tryParse(weightCtrl[ex]?.text ?? ''),
+            unit: 'lbs',
+            rpe: isTime ? double.tryParse(rpeCtrl[ex]?.text ?? '') : null,
+          )
+        ];
+      }
+      ex.groupType = type;
+      ex.groupIntervalMin = intervalMin;
+      ex.groupTotalSets = totalSets;
+    }
+  }
+
+  void dispose() {
+    intervalMinCtrl.dispose();
+    totalSetsCtrl.dispose();
+    workingMaxCtrl.dispose();
+    for (final c in nameCtrl.values) { c.dispose(); }
+    for (final c in pctCtrl.values) { c.dispose(); }
+    for (final c in repsCtrl.values) { c.dispose(); }
+    for (final c in weightCtrl.values) { c.dispose(); }
+    for (final c in rpeCtrl.values) { c.dispose(); }
+    for (final list in perSetRepsCtrl.values) { for (final c in list) { c.dispose(); } }
+    for (final list in perSetWeightCtrl.values) { for (final c in list) { c.dispose(); } }
+    for (final list in perSetRpeCtrl.values) { for (final c in list) { c.dispose(); } }
+    for (final list in perSetPctCtrl.values) { for (final c in list) { c.dispose(); } }
+  }
+}
+
+class _SectionItem {
+  final ProgramExercise? ex;
+  final _ProgGroup? group;
+  _SectionItem.exercise(ProgramExercise e) : ex = e, group = null;
+  _SectionItem.group(_ProgGroup g) : ex = null, group = g;
+  bool get isGroup => group != null;
+  Object get key => isGroup ? group!.id : ex!;
+}
+
+// ─── Add Program Screen ───────────────────────────────────────────────────────
+
+class AddProgramScreen extends StatefulWidget {
+  final DateTime date;
+  final Profile profile;
+  final ProgramDay? existingDay;
+  final void Function(ProgramDay) onSaved;
+  final VoidCallback? onWorkoutLogged;
+
+  const AddProgramScreen({
+    super.key,
+    required this.date,
+    required this.profile,
+    required this.existingDay,
+    required this.onSaved,
+    this.onWorkoutLogged,
+  });
+
+  @override
+  State<AddProgramScreen> createState() => _AddProgramScreenState();
+}
+
+class _AddProgramScreenState extends State<AddProgramScreen> {
+  // Each section holds _SectionItem (solo exercise or EMOM/AMRAP group)
+  late final List<_SectionItem> _warmUp;
+  late final List<_SectionItem> _main;
+  late final List<_SectionItem> _coolDown;
+
+  // Controllers for solo strength exercises
+  final Map<ProgramExercise, List<_ProgSetRow>> _rowCtrl = {};
+  final Map<ProgramExercise, String> _unitSel = {};
+
+  late final TextEditingController _notesCtrl;
+  late bool _editMode;
+  late List<ProgramExercise> _outlineExercises;
+
+  static const _months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+  @override
+  void initState() {
+    super.initState();
+    _editMode = widget.existingDay == null;
+    _notesCtrl = TextEditingController(text: widget.existingDay?.notes ?? '');
+    _outlineExercises = widget.existingDay?.exercises ?? [];
+    final existing = _outlineExercises;
+    _warmUp   = _parseSection(existing, 'warmUp');
+    _main     = _parseSection(existing, 'main');
+    _coolDown = _parseSection(existing, 'coolDown');
+  }
+
+  /// Reconstruct _SectionItem list from flat ProgramExercise list for one section.
+  List<_SectionItem> _parseSection(List<ProgramExercise> all, String section) {
+    final filtered = all.where((e) =>
+        e.block == section ||
+        (section == 'main' && e.block != 'warmUp' && e.block != 'coolDown')).toList();
+    final items = <_SectionItem>[];
+    final seenGroups = <String>{};
+    for (final ex in filtered) {
+      if (ex.groupId == null) {
+        _initCtrl(ex);
+        items.add(_SectionItem.exercise(ex));
+      } else if (!seenGroups.contains(ex.groupId)) {
+        seenGroups.add(ex.groupId!);
+        final groupExes = filtered.where((e) => e.groupId == ex.groupId).toList();
+        final group = _ProgGroup(
+          type: ex.groupType ?? 'emom',
+          exercises: groupExes,
+          intervalMin: (ex.groupIntervalMin ?? 1).toString(),
+          totalSets: (ex.groupTotalSets ?? 6).toString(),
+          workingMax: ex.groupWorkingMax != null ? ex.groupWorkingMax!.toStringAsFixed(0) : '',
+        );
+        items.add(_SectionItem.group(group));
+      }
+    }
+    return items;
+  }
+
+  @override
+  void dispose() {
+    _notesCtrl.dispose();
+    for (final rows in _rowCtrl.values) { for (final r in rows) { r.dispose(); } }
+    // dispose group controllers (collected from all sections)
+    for (final item in [..._warmUp, ..._main, ..._coolDown]) {
+      item.group?.dispose();
+    }
+    super.dispose();
+  }
+
+  void _initCtrl(ProgramExercise ex) {
+    _unitSel[ex] = ex.sets.isNotEmpty ? ex.sets.first.unit : 'lbs';
+    _rowCtrl[ex] = ex.sets.isNotEmpty
+        ? ex.sets.map((s) => _ProgSetRow.fromProgramSet(s)).toList()
+        : [_ProgSetRow(), _ProgSetRow(), _ProgSetRow()];
+  }
+
+  void _disposeCtrl(ProgramExercise ex) {
+    for (final r in _rowCtrl[ex] ?? []) { r.dispose(); }
+    _rowCtrl.remove(ex);
+    _unitSel.remove(ex);
+  }
+
+  // Flatten all section items back to a List of ProgramExercise for saving.
+  List<ProgramExercise> _flattenSection(List<_SectionItem> items, String blockKey) {
+    final result = <ProgramExercise>[];
+    for (final item in items) {
+      if (item.ex != null) {
+        final ex = item.ex!;
+        ex.block = blockKey;
+        ex.groupId = null;
+        ex.groupType = null;
+        ex.sets = (_rowCtrl[ex] ?? []).map((r) => ProgramSet(
+          reps: int.tryParse(r.reps.text) ?? 5,
+          weight: double.tryParse(r.weight.text),
+          unit: _unitSel[ex] ?? 'lbs',
+          rpe: double.tryParse(r.rpe.text),
+          status: r.status,
+        )).toList();
+        result.add(ex);
+      } else if (item.group != null) {
+        final g = item.group!;
+        g.flush();
+        for (final ex in g.exercises) {
+          ex.block = blockKey;
+          ex.groupId = g.id;
+          result.add(ex);
+        }
+      }
+    }
+    return result;
+  }
+
+  String get _dateLabel {
+    final d = widget.date;
+    const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    return '${days[d.weekday % 7]}, ${_months[d.month - 1]} ${d.day}';
+  }
+
+
+  List<ProgramExercise> _buildExerciseList() => [
+    ..._flattenSection(_warmUp, 'warmUp'),
+    ..._flattenSection(_main, 'main'),
+    ..._flattenSection(_coolDown, 'coolDown'),
+  ];
+
+  void _persistWorkout(List<ProgramExercise> exercises, {required bool completed, String? notes}) {
+    notes ??= _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim();
+    widget.onSaved(ProgramDay(
+      date: widget.date,
+      exercises: exercises,
+      completed: completed,
+      notes: notes,
+    ));
+    widget.onWorkoutLogged?.call();
+  }
+
+  void _save() {
+    final exercises = _buildExerciseList();
+    _persistWorkout(exercises, completed: false);
+    setState(() {
+      _outlineExercises = exercises;
+      _editMode = false;
+    });
+  }
+
+  void _startWorkout() {
+    final exercises = _buildExerciseList();
+    Navigator.push(context, MaterialPageRoute(
+      builder: (_) => ProgramFlowScreen(
+        exercises: exercises,
+        dateLabel: _dateLabel,
+        onCompleted: (String? notes) {
+          final n = notes?.trim().isEmpty == true ? null : notes?.trim();
+          // Use captured 'exercises' directly — do NOT call _buildExerciseList() here,
+          // as flush() would overwrite the actual workout data with planned values.
+          _persistWorkout(exercises, completed: true, notes: n);
+          if (mounted) setState(() => _outlineExercises = List.of(exercises));
+        },
+      ),
+    ));
+  }
+
+  // ── Exercise picker (Strength / EMOM / AMRAP) ─────────────────────────────
+
+  Future<Set<String>> _showExercisePicker({required Set<String> exclude}) async {
+    final liftNames = widget.profile.lifts.map((l) => l.name).toList();
+    final selected = <String>{};
+    final customCtrl = TextEditingController();
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlg) => AlertDialog(
+          title: const Text('Select Exercises'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (liftNames.isNotEmpty) ...[
+                  SizedBox(
+                    height: 200,
+                    child: ListView(
+                      children: liftNames.where((n) => !exclude.contains(n)).map((name) =>
+                        CheckboxListTile(
+                          title: Text(name),
+                          value: selected.contains(name),
+                          onChanged: (v) => setDlg(() {
+                            if (v == true) { selected.add(name); } else { selected.remove(name); }
+                          }),
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                        ),
+                      ).toList(),
+                    ),
+                  ),
+                  const Divider(),
+                ],
+                Row(children: [
+                  Expanded(
+                    child: TextField(
+                      controller: customCtrl,
+                      decoration: const InputDecoration(
+                        hintText: 'Custom exercise…',
+                        isDense: true,
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    icon: const Icon(Icons.add),
+                    onPressed: () {
+                      final t = customCtrl.text.trim();
+                      if (t.isNotEmpty) { setDlg(() => selected.add(t)); customCtrl.clear(); }
+                    },
+                  ),
+                ]),
+                if (selected.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 4,
+                    children: selected.map((s) => Chip(
+                      label: Text(s, style: const TextStyle(fontSize: 12)),
+                      onDeleted: () => setDlg(() => selected.remove(s)),
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    )).toList(),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+            FilledButton(
+              onPressed: selected.isEmpty ? null : () => Navigator.pop(ctx),
+              child: const Text('Add'),
+            ),
+          ],
+        ),
+      ),
+    );
+    customCtrl.dispose();
+    return selected;
+  }
+
+  Future<void> _addStrength(String blockKey, List<_SectionItem> section) async {
+    final existing = section.where((i) => i.ex != null).map((i) => i.ex!.name).toSet();
+    final selected = await _showExercisePicker(exclude: existing);
+    if (selected.isEmpty) return;
+    setState(() {
+      for (final name in selected) {
+        final ex = ProgramExercise(name: name, block: blockKey);
+        _initCtrl(ex);
+        section.add(_SectionItem.exercise(ex));
+      }
+    });
+  }
+
+  Future<void> _addGroupWorkout(String type, String blockKey, List<_SectionItem> section) async {
+    final selected = await _showExercisePicker(exclude: {});
+    if (selected.isEmpty || !mounted) return;
+
+    // Show config dialog (min/sets for EMOM/EMOM Strength, time cap for AMRAP)
+    final isEmomType = type == 'emom' || type == 'emomStrength';
+    final configCtrl1 = TextEditingController(text: isEmomType ? '1' : '20');
+    final configCtrl2 = TextEditingController(text: '6');
+    bool confirmed = false;
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(isEmomType ? 'EMOM Config' : 'AMRAP Config'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Show selected exercises
+            Wrap(
+              spacing: 6,
+              runSpacing: 4,
+              children: selected.map((s) => Chip(
+                label: Text(s, style: const TextStyle(fontSize: 12)),
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              )).toList(),
+            ),
+            const SizedBox(height: 16),
+            if (isEmomType) ...[
+              Row(children: [
+                Expanded(
+                  child: TextField(
+                    controller: configCtrl1,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: 'Min per interval',
+                      border: OutlineInputBorder(),
+                      suffixText: 'min',
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: TextField(
+                    controller: configCtrl2,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: 'Total sets',
+                      border: OutlineInputBorder(),
+                      hintText: 'e.g. 6',
+                    ),
+                  ),
+                ),
+              ]),
+              const SizedBox(height: 8),
+              // Preview
+              Builder(builder: (ctx) {
+                final exList = selected.toList();
+                final totalSets = int.tryParse(configCtrl2.text) ?? 6;
+                final minPer = int.tryParse(configCtrl1.text) ?? 1;
+                final lines = List.generate(totalSets, (i) {
+                  final exName = exList[i % exList.length];
+                  return 'Min ${i + 1}: $exName';
+                });
+                return Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.white10,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Preview (${minPer}min intervals)',
+                          style: const TextStyle(fontSize: 11, color: Colors.white54)),
+                      const SizedBox(height: 4),
+                      ...lines.map((l) => Text(l,
+                          style: const TextStyle(fontSize: 12, color: Colors.white70))),
+                    ],
+                  ),
+                );
+              }),
+            ] else ...[
+              TextField(
+                controller: configCtrl1,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Time cap',
+                  border: OutlineInputBorder(),
+                  suffixText: 'min',
+                ),
+              ),
+            ],
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () { confirmed = true; Navigator.pop(ctx); },
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
+
+    configCtrl1.dispose();
+    configCtrl2.dispose();
+
+    if (!confirmed) return;
+    setState(() {
+      final exercises = selected.map((name) => ProgramExercise(
+        name: name, block: blockKey, sets: [ProgramSet(reps: 10)],
+      )).toList();
+      final group = _ProgGroup(
+        type: type,
+        exercises: exercises,
+        intervalMin: configCtrl1.text,
+        totalSets: configCtrl2.text,
+      );
+      section.add(_SectionItem.group(group));
+    });
+  }
+
+  void _showAddMenu(String blockKey, List<_SectionItem> section) {
+    showModalBottomSheet(
+      context: context,
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.fitness_center),
+              title: const Text('Strength'),
+              subtitle: const Text('Sets × Reps with weight tracking'),
+              onTap: () { Navigator.pop(context); _addStrength(blockKey, section); },
+            ),
+            ListTile(
+              leading: const Icon(Icons.timer_outlined),
+              title: const Text('EMOM'),
+              subtitle: const Text('Every Minute On the Minute'),
+              onTap: () { Navigator.pop(context); _addGroupWorkout('emom', blockKey, section); },
+            ),
+            ListTile(
+              leading: const Icon(Icons.fitness_center),
+              title: const Text('EMOM (Strength)'),
+              subtitle: const Text('EMOM with % of working max'),
+              onTap: () { Navigator.pop(context); _addGroupWorkout('emomStrength', blockKey, section); },
+            ),
+            ListTile(
+              leading: const Icon(Icons.loop),
+              title: const Text('AMRAP'),
+              subtitle: const Text('As Many Rounds As Possible'),
+              onTap: () { Navigator.pop(context); _addGroupWorkout('amrap', blockKey, section); },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Card builders ─────────────────────────────────────────────────────────
+
+  Widget _statusBtn(ProgramExercise ex, int idx, SetStatus target, IconData icon, Color activeColor) {
+    final row = _rowCtrl[ex]![idx];
+    final active = row.status == target;
+    return GestureDetector(
+      onTap: () => setState(() { row.status = active ? SetStatus.none : target; }),
+      child: Container(
+        width: 32, height: 32,
+        decoration: BoxDecoration(
+          color: active ? activeColor : Colors.white10,
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Icon(icon, size: 16, color: active ? Colors.white : Colors.white38),
+      ),
+    );
+  }
+
+  Widget _buildExerciseCard(ProgramExercise ex, List<_SectionItem> section, int itemIdx) {
+    final rows = _rowCtrl[ex] ?? [];
+    final unit = _unitSel[ex] ?? 'lbs';
+    return Card(
+      key: ObjectKey(ex),
+      margin: const EdgeInsets.only(bottom: 10),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              ReorderableDragStartListener(
+                index: itemIdx,
+                child: const Icon(Icons.drag_handle, color: Colors.white38, size: 22),
+              ),
+              const SizedBox(width: 8),
+              Expanded(child: Text(ex.name,
+                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold))),
+              SegmentedButton<String>(
+                segments: const [
+                  ButtonSegment(value: 'lbs', label: Text('lbs')),
+                  ButtonSegment(value: 'kg', label: Text('kg')),
+                ],
+                selected: {unit},
+                onSelectionChanged: (s) => setState(() => _unitSel[ex] = s.first),
+                style: const ButtonStyle(
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  visualDensity: VisualDensity.compact,
+                ),
+              ),
+              const SizedBox(width: 8),
+              GestureDetector(
+                onTap: () => setState(() { section.removeAt(itemIdx); _disposeCtrl(ex); }),
+                child: const Icon(Icons.close, size: 18, color: Colors.white38),
+              ),
+            ]),
+            const SizedBox(height: 10),
+            const Row(children: [
+              SizedBox(width: 24, child: Text('Set', style: TextStyle(fontSize: 11, color: Colors.white38))),
+              SizedBox(width: 8),
+              SizedBox(width: 56, child: Text('Reps', style: TextStyle(fontSize: 11, color: Colors.white38))),
+              SizedBox(width: 8),
+              Expanded(child: Text('Weight', style: TextStyle(fontSize: 11, color: Colors.white38))),
+              SizedBox(width: 8),
+              SizedBox(width: 48, child: Text('RPE', style: TextStyle(fontSize: 11, color: Colors.white38), textAlign: TextAlign.center)),
+              SizedBox(width: 76),
+            ]),
+            const SizedBox(height: 4),
+            ...rows.asMap().entries.map((e) {
+              final rowIdx = e.key; final row = e.value;
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                  SizedBox(width: 24, child: Text('${rowIdx + 1}',
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold,
+                          color: Theme.of(context).colorScheme.primary))),
+                  const SizedBox(width: 8),
+                  SizedBox(width: 56, child: TextField(
+                    controller: row.reps, keyboardType: TextInputType.number,
+                    textAlign: TextAlign.center,
+                    decoration: const InputDecoration(isDense: true, border: OutlineInputBorder(),
+                        contentPadding: EdgeInsets.symmetric(vertical: 7, horizontal: 4)),
+                  )),
+                  const SizedBox(width: 8),
+                  Expanded(child: TextField(
+                    controller: row.weight,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    textAlign: TextAlign.center,
+                    decoration: const InputDecoration(isDense: true, border: OutlineInputBorder(),
+                        contentPadding: EdgeInsets.symmetric(vertical: 7, horizontal: 4)),
+                  )),
+                  const SizedBox(width: 8),
+                  SizedBox(width: 48, child: TextField(
+                    controller: row.rpe,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    textAlign: TextAlign.center,
+                    decoration: const InputDecoration(isDense: true, border: OutlineInputBorder(),
+                        contentPadding: EdgeInsets.symmetric(vertical: 7, horizontal: 4), hintText: '–'),
+                  )),
+                  const SizedBox(width: 6),
+                  _statusBtn(ex, rowIdx, SetStatus.missed, Icons.close, Colors.red),
+                  const SizedBox(width: 4),
+                  _statusBtn(ex, rowIdx, SetStatus.succeeded, Icons.check, Colors.green),
+                ]),
+              );
+            }),
+            Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+              IconButton(
+                icon: const Icon(Icons.add_circle_outline, size: 20),
+                onPressed: () => setState(() {
+                  final prev = rows.isNotEmpty ? rows.last : null;
+                  rows.add(_ProgSetRow(reps: prev?.reps.text ?? '5',
+                      weight: prev?.weight.text ?? '', rpe: prev?.rpe.text ?? ''));
+                }),
+                padding: EdgeInsets.zero, constraints: const BoxConstraints(),
+                visualDensity: VisualDensity.compact,
+              ),
+              const SizedBox(width: 20),
+              IconButton(
+                icon: const Icon(Icons.remove_circle_outline, size: 20),
+                onPressed: rows.isEmpty ? null : () => setState(() => rows.removeLast().dispose()),
+                padding: EdgeInsets.zero, constraints: const BoxConstraints(),
+                visualDensity: VisualDensity.compact,
+              ),
+            ]),
+            const SizedBox(height: 8),
+            // Mark Done / Done button
+            ex.completed
+                ? Row(children: [
+                    Icon(Icons.check_circle, color: Colors.green.shade400, size: 18),
+                    const SizedBox(width: 6),
+                    Text('Completed', style: TextStyle(color: Colors.green.shade400, fontWeight: FontWeight.w600)),
+                    const Spacer(),
+                    TextButton(
+                      onPressed: () => setState(() => ex.completed = false),
+                      style: TextButton.styleFrom(padding: EdgeInsets.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+                      child: const Text('Undo', style: TextStyle(fontSize: 12, color: Colors.white38)),
+                    ),
+                  ])
+                : SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: () => setState(() => ex.completed = true),
+                      icon: const Icon(Icons.check, size: 16),
+                      label: const Text('Mark Done'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.green.shade400,
+                        side: BorderSide(color: Colors.green.shade700),
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                      ),
+                    ),
+                  ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGroupCard(_ProgGroup group, List<_SectionItem> section, int itemIdx) {
+    final isEmom = group.type == 'emom' || group.type == 'emomStrength';
+    final isEmomStrength = group.type == 'emomStrength';
+    final exList = group.exercises;
+    final totalSets = int.tryParse(group.totalSetsCtrl.text) ?? 6;
+    final isSingleExEmom = isEmom && exList.length == 1;
+    final workingMax = double.tryParse(group.workingMaxCtrl.text) ?? 0;
+    final typeColor = isEmomStrength ? Colors.deepPurple : (isEmom ? Colors.orange : Colors.teal);
+    return Card(
+      key: ValueKey(group.id),
+      margin: const EdgeInsets.only(bottom: 10),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: typeColor.withValues(alpha: 0.6), width: 1.5),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Header
+            Row(children: [
+              ReorderableDragStartListener(
+                index: itemIdx,
+                child: const Icon(Icons.drag_handle, color: Colors.white38, size: 22),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: typeColor.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(isEmomStrength ? 'EMOM (Strength)' : (isEmom ? 'EMOM' : 'AMRAP'),
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: typeColor)),
+              ),
+              const Spacer(),
+              GestureDetector(
+                onTap: () => setState(() { group.dispose(); section.removeAt(itemIdx); }),
+                child: const Icon(Icons.close, size: 18, color: Colors.white38),
+              ),
+            ]),
+            const SizedBox(height: 12),
+            // Config row
+            if (isEmom)
+              Column(
+                children: [
+                  Row(children: [
+                    Expanded(child: TextField(
+                      controller: group.intervalMinCtrl,
+                      keyboardType: TextInputType.number,
+                      onChanged: (_) => setState(() {}),
+                      decoration: const InputDecoration(
+                        labelText: 'Min per interval',
+                        border: OutlineInputBorder(), isDense: true, suffixText: 'min',
+                      ),
+                    )),
+                    const SizedBox(width: 12),
+                    Expanded(child: TextField(
+                      controller: group.totalSetsCtrl,
+                      keyboardType: TextInputType.number,
+                      onChanged: (_) => setState(() {}),
+                      decoration: const InputDecoration(
+                        labelText: 'Total sets',
+                        border: OutlineInputBorder(), isDense: true,
+                      ),
+                    )),
+                  ]),
+                  if (isEmomStrength) ...[
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: group.workingMaxCtrl,
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      onChanged: (_) => setState(() {}),
+                      decoration: const InputDecoration(
+                        labelText: 'Working Max',
+                        border: OutlineInputBorder(), isDense: true, suffixText: 'lbs',
+                      ),
+                    ),
+                  ],
+                ],
+              )
+            else
+              TextField(
+                controller: group.intervalMinCtrl,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Time cap',
+                  border: OutlineInputBorder(), isDense: true, suffixText: 'min',
+                ),
+              ),
+            const SizedBox(height: 14),
+            // ── Single-exercise EMOM: one row per set/minute ──────────────────
+            if (isSingleExEmom) ...[
+              () {
+                final ex = exList.first;
+                final isTime = group.repOrTimeMode[ex] == 'time';
+                group.syncSetControllers(ex, totalSets);
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Editable exercise name
+                    TextField(
+                      controller: group.nameCtrl[ex],
+                      onChanged: (v) => ex.name = v,
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+                      decoration: const InputDecoration(
+                        isDense: true,
+                        border: OutlineInputBorder(),
+                        contentPadding: EdgeInsets.symmetric(vertical: 6, horizontal: 8),
+                        hintText: 'Exercise name',
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    // Reps/Time mode selector (row-level setting)
+                    Row(children: [
+                      const Text('Mode:', style: TextStyle(fontSize: 12, color: Colors.white54)),
+                      const SizedBox(width: 8),
+                      DropdownButton<String>(
+                        value: group.repOrTimeMode[ex] ?? 'reps',
+                        isDense: true,
+                        underline: const SizedBox(),
+                        style: const TextStyle(fontSize: 12, color: Colors.white70),
+                        dropdownColor: const Color(0xFF1E1E1E),
+                        items: const [
+                          DropdownMenuItem(value: 'reps', child: Text('Reps')),
+                          DropdownMenuItem(value: 'time', child: Text('Time')),
+                        ],
+                        onChanged: (v) { if (v != null) setState(() => group.repOrTimeMode[ex] = v); },
+                      ),
+                    ]),
+                    const SizedBox(height: 6),
+                    // Column headers aligned to data rows
+                    Row(children: [
+                      const SizedBox(width: 52),
+                      const SizedBox(width: 8),
+                      SizedBox(width: 46, child: Text(isTime ? 'Time' : 'Reps',
+                          style: const TextStyle(fontSize: 11, color: Colors.white38), textAlign: TextAlign.center)),
+                      const SizedBox(width: 8),
+                      if (isEmomStrength) ...[
+                        const SizedBox(width: 46, child: Text('%', style: TextStyle(fontSize: 11, color: Colors.white38), textAlign: TextAlign.center)),
+                        const SizedBox(width: 8),
+                      ],
+                      SizedBox(width: 70, child: Text(isTime ? 'RPE' : 'Weight',
+                          style: const TextStyle(fontSize: 11, color: Colors.white38), textAlign: TextAlign.center)),
+                    ]),
+                    const SizedBox(height: 4),
+                    // One row per set
+                    ...List.generate(totalSets, (i) => Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: Row(children: [
+                        SizedBox(
+                          width: 52,
+                          child: Text('Min ${i + 1}',
+                              style: TextStyle(fontSize: 11, color: typeColor, fontWeight: FontWeight.w600)),
+                        ),
+                        const SizedBox(width: 8),
+                        SizedBox(width: 46, child: TextField(
+                          controller: group.perSetRepsCtrl[ex]![i],
+                          keyboardType: TextInputType.number,
+                          textAlign: TextAlign.center,
+                          decoration: InputDecoration(
+                            isDense: true,
+                            border: const OutlineInputBorder(),
+                            contentPadding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+                            suffixText: isTime ? 's' : null,
+                          ),
+                        )),
+                        const SizedBox(width: 8),
+                        if (isEmomStrength) ...[
+                          SizedBox(width: 46, child: TextField(
+                            controller: group.perSetPctCtrl[ex]![i],
+                            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                            textAlign: TextAlign.center,
+                            onChanged: (v) {
+                              final pct = double.tryParse(v);
+                              if (pct != null && workingMax > 0) {
+                                final calculated = (pct / 100 * workingMax).roundToDouble();
+                                group.perSetWeightCtrl[ex]![i].text = calculated.toStringAsFixed(0);
+                              }
+                            },
+                            decoration: const InputDecoration(
+                              isDense: true,
+                              border: OutlineInputBorder(),
+                              contentPadding: EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+                            ),
+                          )),
+                          const SizedBox(width: 8),
+                        ],
+                        SizedBox(width: 70, child: TextField(
+                          controller: isTime
+                              ? group.perSetRpeCtrl[ex]![i]
+                              : group.perSetWeightCtrl[ex]![i],
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          textAlign: TextAlign.center,
+                          decoration: InputDecoration(
+                            isDense: true,
+                            border: const OutlineInputBorder(),
+                            contentPadding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+                            hintText: isTime ? 'RPE' : '–',
+                          ),
+                        )),
+                      ]),
+                    )),
+                  ],
+                );
+              }(),
+            ] else ...[
+            // ── Multi-exercise: one row per unique exercise ───────────────────
+            // Column headers
+            Row(children: [
+              SizedBox(width: 28, child: Text('#', style: TextStyle(fontSize: 11, color: Colors.white38))),
+              const SizedBox(width: 8),
+              const Expanded(child: Text('Exercise', style: TextStyle(fontSize: 11, color: Colors.white38))),
+              const SizedBox(width: 8),
+              if (isEmom)
+                const SizedBox(width: 110, child: Text('Reps / Time', style: TextStyle(fontSize: 11, color: Colors.white38), textAlign: TextAlign.center))
+              else
+                const SizedBox(width: 56, child: Text('Reps', style: TextStyle(fontSize: 11, color: Colors.white38), textAlign: TextAlign.center)),
+              const SizedBox(width: 8),
+              if (isEmomStrength) ...[
+                const SizedBox(width: 46, child: Text('%', style: TextStyle(fontSize: 11, color: Colors.white38), textAlign: TextAlign.center)),
+                const SizedBox(width: 8),
+              ],
+              const SizedBox(width: 70, child: Text('Wt / RPE', style: TextStyle(fontSize: 11, color: Colors.white38), textAlign: TextAlign.center)),
+              const SizedBox(width: 26),
+            ]),
+            const SizedBox(height: 4),
+            ...exList.asMap().entries.map((e) {
+              final idx = e.key;
+              final ex = e.value;
+              final isTime = isEmom && group.repOrTimeMode[ex] == 'time';
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Row(children: [
+                  SizedBox(
+                    width: 28,
+                    child: Text('${idx + 1}.',
+                        style: TextStyle(fontSize: 13, color: typeColor, fontWeight: FontWeight.w600)),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(child: TextField(
+                    controller: group.nameCtrl[ex],
+                    onChanged: (v) => ex.name = v,
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+                    decoration: const InputDecoration(
+                      isDense: true,
+                      border: OutlineInputBorder(),
+                      contentPadding: EdgeInsets.symmetric(vertical: 6, horizontal: 8),
+                      hintText: 'Exercise name',
+                    ),
+                  )),
+                  const SizedBox(width: 8),
+                  if (isEmom)
+                    SizedBox(
+                      width: 110,
+                      child: Row(children: [
+                        SizedBox(
+                          width: 58,
+                          child: DropdownButton<String>(
+                            value: group.repOrTimeMode[ex] ?? 'reps',
+                            isDense: true,
+                            underline: const SizedBox(),
+                            style: const TextStyle(fontSize: 11, color: Colors.white70),
+                            dropdownColor: const Color(0xFF1E1E1E),
+                            items: const [
+                              DropdownMenuItem(value: 'reps', child: Text('Rep')),
+                              DropdownMenuItem(value: 'time', child: Text('Time')),
+                            ],
+                            onChanged: (v) { if (v != null) setState(() => group.repOrTimeMode[ex] = v); },
+                          ),
+                        ),
+                        const SizedBox(width: 2),
+                        Expanded(child: TextField(
+                          controller: group.repsCtrl[ex],
+                          keyboardType: TextInputType.number,
+                          textAlign: TextAlign.center,
+                          decoration: InputDecoration(
+                            isDense: true,
+                            border: const OutlineInputBorder(),
+                            contentPadding: const EdgeInsets.symmetric(vertical: 6, horizontal: 2),
+                            suffixText: isTime ? 's' : null,
+                          ),
+                        )),
+                      ]),
+                    )
+                  else
+                    SizedBox(width: 56, child: TextField(
+                      controller: group.repsCtrl[ex],
+                      keyboardType: TextInputType.number,
+                      textAlign: TextAlign.center,
+                      decoration: const InputDecoration(isDense: true, border: OutlineInputBorder(),
+                          contentPadding: EdgeInsets.symmetric(vertical: 6, horizontal: 4)),
+                    )),
+                  const SizedBox(width: 8),
+                  if (isEmomStrength) ...[
+                    SizedBox(width: 46, child: TextField(
+                      controller: group.pctCtrl[ex],
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      textAlign: TextAlign.center,
+                      onChanged: (v) {
+                        final pct = double.tryParse(v);
+                        if (pct != null && workingMax > 0) {
+                          group.weightCtrl[ex]!.text =
+                              (pct / 100 * workingMax).roundToDouble().toStringAsFixed(0);
+                        }
+                      },
+                      decoration: const InputDecoration(
+                        isDense: true,
+                        border: OutlineInputBorder(),
+                        contentPadding: EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+                      ),
+                    )),
+                    const SizedBox(width: 8),
+                  ],
+                  SizedBox(width: 70, child: TextField(
+                    controller: isTime ? group.rpeCtrl[ex] : group.weightCtrl[ex],
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    textAlign: TextAlign.center,
+                    decoration: InputDecoration(
+                      isDense: true,
+                      border: const OutlineInputBorder(),
+                      contentPadding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+                      hintText: isTime ? 'RPE' : '–',
+                    ),
+                  )),
+                  const SizedBox(width: 4),
+                  // Delete exercise from group
+                  GestureDetector(
+                    onTap: exList.length <= 1 ? null : () {
+                      setState(() {
+                        group.nameCtrl[ex]?.dispose();
+                        group.repsCtrl[ex]?.dispose();
+                        group.weightCtrl[ex]?.dispose();
+                        group.rpeCtrl[ex]?.dispose();
+                        group.nameCtrl.remove(ex);
+                        group.repsCtrl.remove(ex);
+                        group.weightCtrl.remove(ex);
+                        group.rpeCtrl.remove(ex);
+                        group.repOrTimeMode.remove(ex);
+                        exList.remove(ex);
+                      });
+                    },
+                    child: Icon(Icons.close, size: 16,
+                        color: exList.length > 1 ? Colors.white38 : Colors.white12),
+                  ),
+                ]),
+              );
+            }),
+            ],
+            // Add Exercise to group
+            const SizedBox(height: 4),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                onPressed: () async {
+                  final blockKey = exList.isNotEmpty ? exList.first.block : '';
+                  final names = await _showExercisePicker(
+                    exclude: exList.map((e) => e.name).toSet(),
+                  );
+                  if (names.isEmpty || !mounted) return;
+                  setState(() {
+                    for (final name in names) {
+                      group.addExercise(ProgramExercise(name: name, block: blockKey));
+                    }
+                  });
+                },
+                icon: Icon(Icons.add, size: 15, color: typeColor),
+                label: Text('Add Exercise',
+                    style: TextStyle(fontSize: 12, color: typeColor)),
+              ),
+            ),
+            const SizedBox(height: 8),
+            // Mark Done / Done for the whole group
+            () {
+              final groupDone = exList.isNotEmpty && exList.every((e) => e.completed);
+              return groupDone
+                  ? Row(children: [
+                      Icon(Icons.check_circle, color: Colors.green.shade400, size: 18),
+                      const SizedBox(width: 6),
+                      Text('Completed', style: TextStyle(color: Colors.green.shade400, fontWeight: FontWeight.w600)),
+                      const Spacer(),
+                      TextButton(
+                        onPressed: () => setState(() { for (final e in exList) { e.completed = false; } }),
+                        style: TextButton.styleFrom(padding: EdgeInsets.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+                        child: const Text('Undo', style: TextStyle(fontSize: 12, color: Colors.white38)),
+                      ),
+                    ])
+                  : SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: () => setState(() { for (final e in exList) { e.completed = true; } }),
+                        icon: const Icon(Icons.check, size: 16),
+                        label: const Text('Mark Done'),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.green.shade400,
+                          side: BorderSide(color: Colors.green.shade700),
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                        ),
+                      ),
+                    );
+            }(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBlock(String title, String blockKey, List<_SectionItem> section) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(children: [
+            Expanded(child: Text(title,
+                style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold))),
+            TextButton.icon(
+              onPressed: () => _showAddMenu(blockKey, section),
+              icon: const Icon(Icons.add, size: 18),
+              label: const Text('Add Exercise'),
+            ),
+          ]),
+          const SizedBox(height: 8),
+          if (section.isEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text('No exercises yet.',
+                  style: TextStyle(fontSize: 13,
+                      color: Colors.white.withValues(alpha: 0.38))),
+            )
+          else
+            ReorderableListView(
+              shrinkWrap: true,
+              buildDefaultDragHandles: false,
+              physics: const NeverScrollableScrollPhysics(),
+              onReorder: (oldIdx, newIdx) {
+                setState(() {
+                  if (newIdx > oldIdx) newIdx--;
+                  section.insert(newIdx, section.removeAt(oldIdx));
+                });
+              },
+              children: [
+                for (int i = 0; i < section.length; i++)
+                  section[i].isGroup
+                      ? _buildGroupCard(section[i].group!, section, i)
+                      : _buildExerciseCard(section[i].ex!, section, i),
+              ],
+            ),
+          const Divider(height: 24),
+        ],
+      ),
+    );
+  }
+
+  int _stepIndexFor(List<ProgramExercise> targetExs) {
+    List<List<ProgramExercise>> group(List<ProgramExercise> block) {
+      final result = <List<ProgramExercise>>[];
+      final seen = <String>{};
+      for (final ex in block) {
+        if (ex.groupId == null) { result.add([ex]); }
+        else if (!seen.contains(ex.groupId)) {
+          seen.add(ex.groupId!);
+          result.add(block.where((e) => e.groupId == ex.groupId).toList());
+        }
+      }
+      return result;
+    }
+    final all = _outlineExercises;
+    final warmUp = group(all.where((e) => e.block == 'warmUp').toList());
+    final main = group(all.where((e) => e.block != 'warmUp' && e.block != 'coolDown').toList());
+    final coolDown = group(all.where((e) => e.block == 'coolDown').toList());
+    int idx = 0;
+    if (warmUp.isNotEmpty) {
+      if (warmUp.any((g) => g.any((e) => targetExs.contains(e)))) { return idx; }
+      idx++;
+    }
+    for (final g in main) {
+      if (g.any((e) => targetExs.contains(e))) { return idx; }
+      idx++;
+    }
+    if (coolDown.isNotEmpty && coolDown.any((g) => g.any((e) => targetExs.contains(e)))) {
+      return idx;
+    }
+    return 0;
+  }
+
+  void _openFlowAt(List<ProgramExercise> targetExs) {
+    final exercises = _buildExerciseList();
+    final stepIdx = _stepIndexFor(targetExs);
+    Navigator.push(context, MaterialPageRoute(
+      builder: (_) => ProgramFlowScreen(
+        exercises: exercises,
+        dateLabel: _dateLabel,
+        initialStepIndex: stepIdx,
+        onCompleted: (String? notes) {
+          final n = notes?.trim().isEmpty == true ? null : notes?.trim();
+          _persistWorkout(exercises, completed: true, notes: n);
+          if (mounted) setState(() => _outlineExercises = List.of(exercises));
+        },
+      ),
+    ));
+  }
+
+  /// Groups flat exercises by groupId into [[solo], [group...], ...] order.
+  List<List<ProgramExercise>> _getBlockItems(String blockKey) {
+    final all = _outlineExercises;
+    final filtered = all.where((e) =>
+        e.block == blockKey ||
+        (blockKey == 'main' && e.block != 'warmUp' && e.block != 'coolDown')).toList();
+    final result = <List<ProgramExercise>>[];
+    final seen = <String>{};
+    for (final ex in filtered) {
+      if (ex.groupId == null) {
+        result.add([ex]);
+      } else if (!seen.contains(ex.groupId)) {
+        seen.add(ex.groupId!);
+        result.add(filtered.where((e) => e.groupId == ex.groupId).toList());
+      }
+    }
+    return result;
+  }
+
+  String _itemLabel(List<ProgramExercise> exs) {
+    if (exs.isEmpty) return '';
+    final first = exs.first;
+    if (first.groupId == null) {
+      if (first.sets.isEmpty) return first.name;
+      final s = first.sets.first;
+      final w = s.weight == null || s.weight == 0 ? ''
+          : ' @ ${s.weight!.toInt()} ${s.unit}';
+      return '${first.name} · ${first.sets.length}×${s.reps}$w';
+    }
+    final type = first.groupType ?? 'emom';
+    final interval = first.groupIntervalMin ?? 1;
+    final total = first.groupTotalSets ?? 6;
+    final names = exs.map((e) => e.name).join(', ');
+    final prefix = switch (type) {
+      'emom' => interval == 1 ? 'EMOM' : 'E${interval}MOM',
+      'emomStrength' => interval == 1 ? 'EMOM (Strength)' : 'E${interval}MOM (Strength)',
+      'amrap' => 'AMRAP',
+      _ => 'Group',
+    };
+    final suffix = type == 'amrap' ? '$total min' : '×$total';
+    return '$prefix $suffix: $names';
+  }
+
+
+  Widget? _maxWeightRow(List<ProgramExercise> exs) {
+    final parts = <String>[];
+    for (final ex in exs) {
+      final weights = ex.sets
+          .where((s) => s.weight != null && s.weight! > 0)
+          .map((s) => s.weight!);
+      if (weights.isEmpty) continue;
+      final maxW = weights.reduce((a, b) => a > b ? a : b);
+      final unit = ex.sets.isNotEmpty ? ex.sets.first.unit : 'lbs';
+      final wStr = maxW % 1 == 0 ? maxW.toInt().toString() : maxW.toStringAsFixed(1);
+      parts.add(exs.length > 1 ? '${ex.name}: $wStr $unit' : 'Heaviest Weight: $wStr $unit');
+    }
+    if (parts.isEmpty) return null;
+    return Padding(
+      padding: const EdgeInsets.only(left: 26, bottom: 4),
+      child: Text(parts.join('  ·  '),
+          style: const TextStyle(fontSize: 12, color: Colors.white54)),
+    );
+  }
+
+  Widget _buildOutlineSection(String title, String blockKey) {
+    final items = _getBlockItems(blockKey);
+    if (items.isEmpty) return const SizedBox.shrink();
+    final isMain = blockKey == 'main';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(0, 16, 0, 4),
+          child: Text(title,
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
+                  color: Colors.white54, letterSpacing: 0.8)),
+        ),
+        ...items.map((exs) {
+          final done = exs.every((e) => e.completed);
+          final label = _itemLabel(exs);
+          final maxRow = (isMain && done) ? _maxWeightRow(exs) : null;
+          return InkWell(
+            onTap: () => _openFlowAt(exs),
+            borderRadius: BorderRadius.circular(8),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(children: [
+                    Icon(
+                      done ? Icons.check_circle : Icons.radio_button_unchecked,
+                      size: 16,
+                      color: done ? Colors.green.shade400 : Colors.white38,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(child: Text(label,
+                        style: TextStyle(
+                            fontSize: 14,
+                            color: done ? Colors.white70 : Colors.white))),
+                    const Icon(Icons.chevron_right, size: 16, color: Colors.white24),
+                  ]),
+                  if (maxRow != null) ...[
+                    const SizedBox(height: 2),
+                    maxRow,
+                  ],
+                ],
+              ),
+            ),
+          );
+        }),
+        const Divider(height: 8),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(_dateLabel, style: const TextStyle(fontWeight: FontWeight.bold)),
+        centerTitle: true,
+        actions: _editMode
+            ? [
+                TextButton(
+                  onPressed: _save,
+                  child: const Text('Save', style: TextStyle(fontSize: 16)),
+                ),
+                const SizedBox(width: 8),
+              ]
+            : [
+                TextButton.icon(
+                  onPressed: () => setState(() => _editMode = true),
+                  icon: const Icon(Icons.edit_outlined, size: 18),
+                  label: const Text('Edit', style: TextStyle(fontSize: 16)),
+                ),
+                const SizedBox(width: 8),
+              ],
+      ),
+      floatingActionButton: _editMode
+          ? null
+          : FloatingActionButton(
+              onPressed: _startWorkout,
+              child: const Icon(Icons.arrow_forward),
+            ),
+      body: _editMode
+          ? SingleChildScrollView(
+              padding: const EdgeInsets.only(bottom: 32),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _buildBlock('Warm Up', 'warmUp', _warmUp),
+                  _buildBlock('Main', 'main', _main),
+                  _buildBlock('Cool Down', 'coolDown', _coolDown),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                    child: TextField(
+                      controller: _notesCtrl,
+                      maxLines: 4,
+                      decoration: const InputDecoration(
+                        labelText: 'Notes',
+                        hintText: 'Add workout notes…',
+                        border: OutlineInputBorder(),
+                        alignLabelWithHint: true,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            )
+          : ListView(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
+              children: [
+                _buildOutlineSection('Warm Up', 'warmUp'),
+                _buildOutlineSection('Main', 'main'),
+                _buildOutlineSection('Cool Down', 'coolDown'),
+                if (widget.existingDay?.notes != null &&
+                    widget.existingDay!.notes!.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  Card(
+                    child: ListTile(
+                      leading: const Icon(Icons.notes_outlined),
+                      title: Text(widget.existingDay!.notes!),
+                      subtitle: const Text('Notes'),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+    );
+  }
+}
+
+// ─── Program Flow Screen (Guided Workout) ─────────────────────────────────────
+
+enum _FlowStepKind { warmUp, mainItem, coolDown, done }
+
+class _FlowStep {
+  final _FlowStepKind kind;
+  final List<List<ProgramExercise>> items;
+  _FlowStep(this.kind, this.items);
+}
+
+class ProgramFlowScreen extends StatefulWidget {
+  final List<ProgramExercise> exercises;
+  final String dateLabel;
+  final void Function(String? notes)? onCompleted;
+  final int initialStepIndex;
+
+  const ProgramFlowScreen({
+    super.key,
+    required this.exercises,
+    required this.dateLabel,
+    this.onCompleted,
+    this.initialStepIndex = 0,
+  });
+
+  @override
+  State<ProgramFlowScreen> createState() => _ProgramFlowScreenState();
+}
+
+class _ProgramFlowScreenState extends State<ProgramFlowScreen> {
+  late final List<_FlowStep> _steps;
+  late int _stepIndex;
+  late final TextEditingController _notesCtrl;
+  final Map<ProgramExercise, List<TextEditingController>> _repsCtrl = {};
+  final Map<ProgramExercise, List<TextEditingController>> _weightCtrl = {};
+  final Map<ProgramExercise, List<TextEditingController>> _rpeCtrl = {};
+  final Map<ProgramExercise, List<TextEditingController>> _pctCtrl = {};
+  final Map<ProgramExercise, TextEditingController> _workingMaxCtrl = {};
+  final Map<ProgramExercise, List<SetStatus>> _statusMap = {};
+
+  @override
+  void dispose() {
+    _notesCtrl.dispose();
+    for (final list in _repsCtrl.values) { for (final c in list) { c.dispose(); } }
+    for (final list in _weightCtrl.values) { for (final c in list) { c.dispose(); } }
+    for (final list in _rpeCtrl.values) { for (final c in list) { c.dispose(); } }
+    for (final list in _pctCtrl.values) { for (final c in list) { c.dispose(); } }
+    for (final c in _workingMaxCtrl.values) { c.dispose(); }
+    super.dispose();
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _steps = _buildSteps();
+    _stepIndex = widget.initialStepIndex.clamp(0, _steps.length - 1);
+    _notesCtrl = TextEditingController();
+    _initControllers();
+  }
+
+  void _initControllers() {
+    for (final step in _steps) {
+      for (final exs in step.items) {
+        for (final ex in exs) {
+          if (_repsCtrl.containsKey(ex)) continue;
+          // For single-exercise emom/emomStrength, pad to totalSets rows
+          final isSingleExEmomGroup = exs.length == 1 &&
+              ex.groupId != null &&
+              (ex.groupType == 'emom' || ex.groupType == 'emomStrength');
+          final targetCount = isSingleExEmomGroup && (ex.groupTotalSets ?? 0) > 0
+              ? ex.groupTotalSets!
+              : (ex.sets.isNotEmpty ? ex.sets.length : 0);
+          final template = ex.sets.isNotEmpty ? ex.sets.first : ProgramSet(reps: 10);
+          final padded = List.generate(targetCount,
+              (i) => i < ex.sets.length ? ex.sets[i] : ProgramSet(reps: template.reps));
+          _repsCtrl[ex] = padded.map((s) => TextEditingController(
+              text: s.reps == 0 ? '' : '${s.reps}')).toList();
+          _weightCtrl[ex] = padded.map((s) => TextEditingController(
+              text: s.weight == null || s.weight == 0 ? ''
+                  : (s.weight! % 1 == 0
+                      ? s.weight!.toInt().toString()
+                      : s.weight!.toStringAsFixed(1)))).toList();
+          _rpeCtrl[ex] = padded.map((s) => TextEditingController(
+              text: s.rpe == null ? '' : s.rpe!.toStringAsFixed(1))).toList();
+          _pctCtrl[ex] = padded.map((s) => TextEditingController(
+              text: s.pct == null ? '' : s.pct!.toStringAsFixed(0))).toList();
+          _statusMap[ex] = padded.map((s) => s.status).toList();
+          if (ex.groupType == 'emomStrength') {
+            _workingMaxCtrl[ex] = TextEditingController(
+                text: ex.groupWorkingMax != null && ex.groupWorkingMax! > 0
+                    ? ex.groupWorkingMax!.toStringAsFixed(0)
+                    : '');
+          }
+        }
+      }
+    }
+  }
+
+  void _saveStepData(_FlowStep step) {
+    for (final exs in step.items) {
+      for (final ex in exs) {
+        final rList = _repsCtrl[ex];
+        final wList = _weightCtrl[ex];
+        if (rList == null || rList.isEmpty) continue;
+        final unit = ex.sets.isNotEmpty ? ex.sets.first.unit : 'lbs';
+        final eList = _rpeCtrl[ex];
+        final pList = _pctCtrl[ex];
+        final sList = _statusMap[ex];
+        final wmCtrl = _workingMaxCtrl[ex];
+        if (wmCtrl != null) ex.groupWorkingMax = double.tryParse(wmCtrl.text);
+        ex.sets = List.generate(rList.length, (i) {
+          final old = i < ex.sets.length ? ex.sets[i] : null;
+          return ProgramSet(
+            reps: int.tryParse(rList[i].text) ?? 0,
+            weight: double.tryParse(wList![i].text),
+            unit: old?.unit ?? unit,
+            rpe: double.tryParse(eList?[i].text ?? ''),
+            pct: double.tryParse(pList?[i].text ?? ''),
+            status: sList != null && i < sList.length ? sList[i] : (old?.status ?? SetStatus.none),
+          );
+        });
+      }
+    }
+  }
+
+  void _saveAllSteps() {
+    for (final step in _steps.where((s) => s.kind != _FlowStepKind.done)) {
+      _saveStepData(step);
+    }
+  }
+
+  List<List<ProgramExercise>> _groupItems(String blockKey) {
+    final filtered = widget.exercises.where((e) =>
+        blockKey == 'main'
+            ? (e.block != 'warmUp' && e.block != 'coolDown')
+            : e.block == blockKey).toList();
+    final result = <List<ProgramExercise>>[];
+    final seen = <String>{};
+    for (final ex in filtered) {
+      if (ex.groupId == null) {
+        result.add([ex]);
+      } else if (!seen.contains(ex.groupId)) {
+        seen.add(ex.groupId!);
+        result.add(filtered.where((e) => e.groupId == ex.groupId).toList());
+      }
+    }
+    return result;
+  }
+
+  List<_FlowStep> _buildSteps() {
+    final steps = <_FlowStep>[];
+    final warmUp = _groupItems('warmUp');
+    final main = _groupItems('main');
+    final coolDown = _groupItems('coolDown');
+    if (warmUp.isNotEmpty) steps.add(_FlowStep(_FlowStepKind.warmUp, warmUp));
+    for (final item in main) { steps.add(_FlowStep(_FlowStepKind.mainItem, [item])); }
+    if (coolDown.isNotEmpty) steps.add(_FlowStep(_FlowStepKind.coolDown, coolDown));
+    steps.add(_FlowStep(_FlowStepKind.done, []));
+    return steps;
+  }
+
+Widget _buildSetsTable(BuildContext context, ProgramExercise ex, {bool showStatus = true}) {
+    final rList = _repsCtrl[ex];
+    final wList = _weightCtrl[ex];
+    final eList = _rpeCtrl[ex];
+    final unit = ex.sets.isNotEmpty ? ex.sets.first.unit : 'lbs';
+    final readOnly = ex.completed;
+    if (rList == null || rList.isEmpty) {
+      if (!readOnly) {
+        return TextButton.icon(
+          onPressed: () => setState(() {
+            _repsCtrl[ex]!.add(TextEditingController());
+            _weightCtrl[ex]!.add(TextEditingController());
+            _rpeCtrl[ex]!.add(TextEditingController());
+          }),
+          icon: const Icon(Icons.add, size: 16),
+          label: const Text('Add Set'),
+        );
+      }
+      return const Text('No sets', style: TextStyle(color: Colors.white38, fontSize: 13));
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(children: [
+          const SizedBox(width: 24, child: Text('Set', style: TextStyle(fontSize: 11, color: Colors.white38))),
+          const SizedBox(width: 8),
+          const SizedBox(width: 56, child: Text('Reps', style: TextStyle(fontSize: 11, color: Colors.white38))),
+          const SizedBox(width: 8),
+          Expanded(child: Text('Weight ($unit)', style: const TextStyle(fontSize: 11, color: Colors.white38))),
+          const SizedBox(width: 8),
+          const SizedBox(width: 48, child: Text('RPE', style: TextStyle(fontSize: 11, color: Colors.white38), textAlign: TextAlign.center)),
+          if (!readOnly) const SizedBox(width: 32),
+          const SizedBox(width: 70),
+        ]),
+        const SizedBox(height: 6),
+        ...List.generate(rList.length, (i) => Padding(
+          padding: const EdgeInsets.only(bottom: 4),
+          child: Row(children: [
+            SizedBox(width: 24, child: Text('${i + 1}',
+                style: TextStyle(fontSize: 13,
+                    color: Theme.of(context).colorScheme.primary,
+                    fontWeight: FontWeight.bold))),
+            const SizedBox(width: 8),
+            if (readOnly) ...[
+              SizedBox(width: 56, child: Text(rList[i].text.isEmpty ? '–' : rList[i].text,
+                  style: const TextStyle(fontSize: 14))),
+              const SizedBox(width: 8),
+              Expanded(child: Text(wList![i].text.isEmpty ? '–' : wList[i].text,
+                  style: const TextStyle(fontSize: 14))),
+              const SizedBox(width: 8),
+              SizedBox(width: 48, child: Text(eList![i].text.isEmpty ? '–' : eList[i].text,
+                  textAlign: TextAlign.center, style: const TextStyle(fontSize: 14))),
+            ] else ...[
+              SizedBox(width: 56, child: TextField(
+                controller: rList[i],
+                keyboardType: TextInputType.number,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 13),
+                decoration: const InputDecoration(
+                  isDense: true,
+                  border: OutlineInputBorder(),
+                  contentPadding: EdgeInsets.symmetric(vertical: 7, horizontal: 4),
+                ),
+              )),
+              const SizedBox(width: 8),
+              Expanded(child: TextField(
+                controller: wList![i],
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 13),
+                decoration: const InputDecoration(
+                  isDense: true,
+                  border: OutlineInputBorder(),
+                  contentPadding: EdgeInsets.symmetric(vertical: 7, horizontal: 4),
+                ),
+              )),
+              const SizedBox(width: 8),
+              SizedBox(width: 48, child: TextField(
+                controller: eList![i],
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 13),
+                decoration: const InputDecoration(
+                  isDense: true,
+                  border: OutlineInputBorder(),
+                  contentPadding: EdgeInsets.symmetric(vertical: 7, horizontal: 4),
+                  hintText: '–',
+                ),
+              )),
+              const SizedBox(width: 8),
+              SizedBox(width: 24, child: IconButton(
+                padding: EdgeInsets.zero,
+                icon: const Icon(Icons.close, size: 16, color: Colors.white38),
+                onPressed: () => setState(() {
+                  rList.removeAt(i);
+                  wList.removeAt(i);
+                  eList.removeAt(i);
+                  _statusMap[ex]?.removeAt(i);
+                  _pctCtrl[ex]?.removeAt(i);
+                }),
+              )),
+            ],
+            if (showStatus) _statusButtons(ex, i),
+          ]),
+        )),
+        if (!readOnly)
+          TextButton.icon(
+            onPressed: () => setState(() {
+              rList.add(TextEditingController());
+              wList!.add(TextEditingController());
+              eList!.add(TextEditingController());
+            }),
+            icon: const Icon(Icons.add, size: 16),
+            label: const Text('Add Set'),
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.white54,
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              visualDensity: VisualDensity.compact,
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _statusButtons(ProgramExercise ex, int i) {
+    final sList = _statusMap[ex];
+    if (sList == null || i >= sList.length) return const SizedBox.shrink();
+    final status = sList[i];
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      const SizedBox(width: 6),
+      GestureDetector(
+        onTap: () => setState(() {
+          sList[i] = status == SetStatus.missed ? SetStatus.none : SetStatus.missed;
+        }),
+        child: Container(
+          width: 28, height: 28,
+          decoration: BoxDecoration(
+            color: status == SetStatus.missed ? Colors.red : Colors.white10,
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Icon(Icons.close, size: 14,
+              color: status == SetStatus.missed ? Colors.white : Colors.white38),
+        ),
+      ),
+      const SizedBox(width: 4),
+      GestureDetector(
+        onTap: () => setState(() {
+          sList[i] = status == SetStatus.succeeded ? SetStatus.none : SetStatus.succeeded;
+        }),
+        child: Container(
+          width: 28, height: 28,
+          decoration: BoxDecoration(
+            color: status == SetStatus.succeeded ? Colors.green : Colors.white10,
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Icon(Icons.check, size: 14,
+              color: status == SetStatus.succeeded ? Colors.white : Colors.white38),
+        ),
+      ),
+    ]);
+  }
+
+  Widget _buildInfoField(String label, String value, String? suffix) {
+    return InputDecorator(
+      decoration: InputDecoration(
+        labelText: label,
+        border: const OutlineInputBorder(),
+        isDense: true,
+        suffixText: suffix,
+        contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+      ),
+      child: Text(value, style: const TextStyle(fontSize: 14)),
+    );
+  }
+
+  Widget _buildExerciseBlock(BuildContext context, List<ProgramExercise> exs, {bool showStatus = true}) {
+    final isGroup = exs.first.groupId != null;
+
+    if (!isGroup) {
+      final ex = exs.first;
+      return Card(
+        margin: const EdgeInsets.symmetric(vertical: 8),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(ex.name, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 12),
+              _buildSetsTable(context, ex, showStatus: showStatus),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final type = exs.first.groupType ?? 'emom';
+    final isEmom = type == 'emom' || type == 'emomStrength';
+    final intervalMin = exs.first.groupIntervalMin ?? 1;
+    final totalSets = exs.first.groupTotalSets ?? 6;
+    final isSingleExEmom = isEmom && exs.length == 1;
+    final typeColor = type == 'emomStrength'
+        ? Colors.deepPurple
+        : type == 'emom' ? Colors.orange : Colors.teal;
+    final badgeText = type == 'emomStrength'
+        ? 'EMOM (Strength)'
+        : type == 'emom' ? 'EMOM' : 'AMRAP';
+
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: typeColor.withValues(alpha: 0.6), width: 1.5),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Badge
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: typeColor.withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(badgeText,
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: typeColor)),
+            ),
+            const SizedBox(height: 12),
+            // Config info (read-only display)
+            if (isEmom)
+              Row(children: [
+                Expanded(child: _buildInfoField('Min per interval', '$intervalMin', 'min')),
+                const SizedBox(width: 12),
+                Expanded(child: _buildInfoField('Total sets', '$totalSets', null)),
+              ])
+            else
+              _buildInfoField('Time cap', '$totalSets', 'min'),
+            const SizedBox(height: 14),
+            if (isSingleExEmom) ...[
+              // Single-exercise EMOM / EMOM (Strength): per-minute rows
+              () {
+                final ex = exs.first;
+                final rList = _repsCtrl[ex] ?? [];
+                final wList = _weightCtrl[ex] ?? [];
+                final pList = _pctCtrl[ex] ?? [];
+                final readOnly = ex.completed;
+                final isStrength = type == 'emomStrength';
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (isStrength) ...[
+                      TextField(
+                        controller: _workingMaxCtrl[ex],
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        decoration: const InputDecoration(
+                          labelText: 'Working Max',
+                          border: OutlineInputBorder(),
+                          isDense: true,
+                          suffixText: 'lbs',
+                        ),
+                        onChanged: (v) {
+                          final wm = double.tryParse(v) ?? 0;
+                          if (wm <= 0) return;
+                          setState(() {
+                            for (int i = 0; i < pList.length; i++) {
+                              final pct = double.tryParse(pList[i].text);
+                              if (pct != null && wList.length > i) {
+                                wList[i].text = (pct / 100 * wm).roundToDouble().toStringAsFixed(0);
+                              }
+                            }
+                          });
+                        },
+                      ),
+                      const SizedBox(height: 10),
+                    ],
+                    Text(ex.name, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
+                    const SizedBox(height: 8),
+                    Row(children: [
+                      const SizedBox(width: 52),
+                      const SizedBox(width: 8),
+                      SizedBox(width: 46, child: Text('Reps',
+                          style: const TextStyle(fontSize: 11, color: Colors.white38),
+                          textAlign: TextAlign.center)),
+                      if (isStrength) ...[
+                        const SizedBox(width: 8),
+                        SizedBox(width: 46, child: Text('%',
+                            style: const TextStyle(fontSize: 11, color: Colors.white38),
+                            textAlign: TextAlign.center)),
+                      ],
+                      const SizedBox(width: 8),
+                      SizedBox(width: 70, child: Text('Weight',
+                          style: const TextStyle(fontSize: 11, color: Colors.white38),
+                          textAlign: TextAlign.center)),
+                      if (showStatus) const SizedBox(width: 66),
+                    ]),
+                    const SizedBox(height: 4),
+                    ...List.generate(rList.length, (i) => Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: Row(children: [
+                        SizedBox(width: 52, child: Text('Min ${i + 1}',
+                            style: TextStyle(fontSize: 11, color: typeColor, fontWeight: FontWeight.w600))),
+                        const SizedBox(width: 8),
+                        if (readOnly) ...[
+                          SizedBox(width: 46, child: Text(
+                              rList[i].text.isEmpty ? '–' : rList[i].text,
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(fontSize: 14))),
+                          if (isStrength) ...[
+                            const SizedBox(width: 8),
+                            SizedBox(width: 46, child: Text(
+                                pList.length > i && pList[i].text.isNotEmpty ? '${pList[i].text}%' : '–',
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(fontSize: 14))),
+                          ],
+                          const SizedBox(width: 8),
+                          SizedBox(width: 70, child: Text(
+                              wList[i].text.isEmpty ? '–' : wList[i].text,
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(fontSize: 14))),
+                        ] else ...[
+                          SizedBox(width: 46, child: TextField(
+                            controller: rList[i],
+                            keyboardType: TextInputType.number,
+                            textAlign: TextAlign.center,
+                            decoration: const InputDecoration(
+                              isDense: true, border: OutlineInputBorder(),
+                              contentPadding: EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+                            ),
+                          )),
+                          if (isStrength && pList.length > i) ...[
+                            const SizedBox(width: 8),
+                            SizedBox(width: 46, child: TextField(
+                              controller: pList[i],
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                              textAlign: TextAlign.center,
+                              onChanged: (v) {
+                                final pct = double.tryParse(v);
+                                final wm = double.tryParse(_workingMaxCtrl[ex]?.text ?? '') ?? 0;
+                                if (pct != null && wm > 0 && wList.length > i) {
+                                  setState(() {
+                                    wList[i].text = (pct / 100 * wm).roundToDouble().toStringAsFixed(0);
+                                  });
+                                }
+                              },
+                              decoration: const InputDecoration(
+                                isDense: true, border: OutlineInputBorder(),
+                                contentPadding: EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+                              ),
+                            )),
+                          ],
+                          const SizedBox(width: 8),
+                          SizedBox(width: 70, child: TextField(
+                            controller: wList[i],
+                            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                            textAlign: TextAlign.center,
+                            decoration: const InputDecoration(
+                              isDense: true, border: OutlineInputBorder(),
+                              contentPadding: EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+                              hintText: '–',
+                            ),
+                          )),
+                        ],
+                        if (showStatus) _statusButtons(ex, i),
+                      ]),
+                    )),
+                  ],
+                );
+              }(),
+            ] else ...[
+              // Multi-exercise EMOM/AMRAP: one row per exercise
+              Row(children: [
+                const SizedBox(width: 28),
+                const SizedBox(width: 8),
+                const Expanded(child: Text('Exercise',
+                    style: TextStyle(fontSize: 11, color: Colors.white38))),
+                const SizedBox(width: 8),
+                const SizedBox(width: 56, child: Text('Reps',
+                    style: TextStyle(fontSize: 11, color: Colors.white38),
+                    textAlign: TextAlign.center)),
+                const SizedBox(width: 8),
+                const SizedBox(width: 70, child: Text('Wt / RPE',
+                    style: TextStyle(fontSize: 11, color: Colors.white38),
+                    textAlign: TextAlign.center)),
+                if (showStatus) const SizedBox(width: 66),
+              ]),
+              const SizedBox(height: 4),
+              ...exs.asMap().entries.map((e) {
+                final idx = e.key;
+                final ex = e.value;
+                final rList = _repsCtrl[ex] ?? [];
+                final wList = _weightCtrl[ex] ?? [];
+                final readOnly = ex.completed;
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Row(children: [
+                    SizedBox(width: 28, child: Text('${idx + 1}.',
+                        style: TextStyle(fontSize: 13, color: typeColor, fontWeight: FontWeight.w600))),
+                    const SizedBox(width: 8),
+                    Expanded(child: Text(ex.name,
+                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500))),
+                    const SizedBox(width: 8),
+                    if (readOnly) ...[
+                      SizedBox(width: 56, child: Text(
+                          rList.isNotEmpty ? (rList[0].text.isEmpty ? '–' : rList[0].text) : '–',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(fontSize: 14))),
+                      const SizedBox(width: 8),
+                      SizedBox(width: 70, child: Text(
+                          wList.isNotEmpty ? (wList[0].text.isEmpty ? '–' : wList[0].text) : '–',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(fontSize: 14))),
+                    ] else ...[
+                      SizedBox(width: 56, child: TextField(
+                        controller: rList.isNotEmpty ? rList[0] : null,
+                        keyboardType: TextInputType.number,
+                        textAlign: TextAlign.center,
+                        decoration: const InputDecoration(
+                          isDense: true, border: OutlineInputBorder(),
+                          contentPadding: EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+                        ),
+                      )),
+                      const SizedBox(width: 8),
+                      SizedBox(width: 70, child: TextField(
+                        controller: wList.isNotEmpty ? wList[0] : null,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        textAlign: TextAlign.center,
+                        decoration: const InputDecoration(
+                          isDense: true, border: OutlineInputBorder(),
+                          contentPadding: EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+                          hintText: '–',
+                        ),
+                      )),
+                    ],
+                    if (showStatus) _statusButtons(ex, 0),
+                  ]),
+                );
+              }),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  bool _stepHasEmptyBoxes(_FlowStep step) {
+    for (final exs in step.items) {
+      for (final ex in exs) {
+        for (final s in ex.sets) {
+          if (s.reps == 0 || s.weight == null || s.weight == 0) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  Widget _buildStepBody(BuildContext context, _FlowStep step) {
+    Widget exerciseContent;
+    String? sectionLabel;
+    switch (step.kind) {
+      case _FlowStepKind.warmUp:
+        sectionLabel = 'WARM UP';
+        exerciseContent = Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: step.items.map((exs) => _buildExerciseBlock(context, exs, showStatus: false)).toList(),
+        );
+      case _FlowStepKind.mainItem:
+        sectionLabel = 'MAIN';
+        exerciseContent = _buildExerciseBlock(context, step.items.first);
+      case _FlowStepKind.coolDown:
+        sectionLabel = 'COOL DOWN';
+        exerciseContent = Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: step.items.map((exs) => _buildExerciseBlock(context, exs)).toList(),
+        );
+      case _FlowStepKind.done:
+        return Center(
+          child: Padding(
+            padding: const EdgeInsets.all(32),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.fitness_center, color: Colors.white54, size: 64),
+                const SizedBox(height: 24),
+                const Text('Workout Finished!',
+                    style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                Text(widget.dateLabel,
+                    style: const TextStyle(fontSize: 16, color: Colors.white54)),
+                const SizedBox(height: 40),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: () {
+                      _saveAllSteps();
+                      // Auto-complete steps with no empty boxes
+                      for (final s in _steps.where((s) => s.kind != _FlowStepKind.done)) {
+                        if (!_stepHasEmptyBoxes(s)) {
+                          for (final exs in s.items) {
+                            for (final ex in exs) {
+                              ex.completed = true;
+                            }
+                          }
+                        }
+                      }
+                      widget.onCompleted?.call(_notesCtrl.text.trim().isEmpty
+                          ? null
+                          : _notesCtrl.text.trim());
+                      Navigator.pop(context);
+                    },
+                    icon: const Icon(Icons.check_circle_outline),
+                    label: const Text('Complete Workout',
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: Colors.green.shade700,
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.pop(context),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                    ),
+                    child: const Text('Return Without Completing',
+                        style: TextStyle(fontSize: 15)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+    }
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: Text(sectionLabel, style: const TextStyle(
+                fontSize: 12, fontWeight: FontWeight.w700,
+                color: Colors.white54, letterSpacing: 1.0)),
+          ),
+          exerciseContent,
+          const SizedBox(height: 16),
+          TextField(
+            controller: _notesCtrl,
+            maxLines: 3,
+            decoration: const InputDecoration(
+              labelText: 'Notes',
+              hintText: 'Add notes for this section…',
+              border: OutlineInputBorder(),
+              alignLabelWithHint: true,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Builder(builder: (ctx) {
+            final allDone = step.items.expand((exs) => exs).every((e) => e.completed);
+            if (allDone) {
+              return Row(children: [
+                Icon(Icons.check_circle, color: Colors.green.shade400, size: 18),
+                const SizedBox(width: 8),
+                Text('Done',
+                    style: TextStyle(color: Colors.green.shade400, fontSize: 14)),
+                const Spacer(),
+                OutlinedButton.icon(
+                  onPressed: () => setState(() {
+                    for (final exs in step.items) {
+                      for (final ex in exs) { ex.completed = false; }
+                    }
+                  }),
+                  icon: const Icon(Icons.edit_outlined, size: 16),
+                  label: const Text('Edit'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white70,
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
+              ]);
+            }
+            return SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () {
+                  _saveStepData(step);
+                  setState(() {
+                    for (final exs in step.items) {
+                      for (final ex in exs) { ex.completed = true; }
+                    }
+                  });
+                },
+                icon: const Icon(Icons.check, size: 16),
+                label: const Text('Mark as Done'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.green.shade400,
+                  side: BorderSide(color: Colors.green.shade400),
+                ),
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+
+
+  String get _appBarTitle {
+    if (_stepIndex >= _steps.length) return '';
+    final step = _steps[_stepIndex];
+    switch (step.kind) {
+      case _FlowStepKind.warmUp: return 'Warm Up';
+      case _FlowStepKind.mainItem:
+        final mainSteps = _steps.where((s) => s.kind == _FlowStepKind.mainItem).toList();
+        final idx = mainSteps.indexWhere((s) => s == _steps[_stepIndex]);
+        return 'Exercise ${idx + 1} of ${mainSteps.length}';
+      case _FlowStepKind.coolDown: return 'Cool Down';
+      case _FlowStepKind.done: return 'Complete';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_steps.isEmpty) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Start Workout')),
+        body: const Center(child: Text('No exercises found.')),
+      );
+    }
+    final step = _steps[_stepIndex];
+    final isDone = step.kind == _FlowStepKind.done;
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(_appBarTitle),
+        centerTitle: true,
+        actions: null,
+      ),
+      body: Column(
+        children: [
+          Expanded(child: _buildStepBody(context, step)),
+          if (!isDone)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 8, 24, 32),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  // Back button — outlined circle
+                  SizedBox(
+                    width: 56,
+                    height: 56,
+                    child: OutlinedButton(
+                      onPressed: () {
+                        _saveStepData(_steps[_stepIndex]);
+                        if (_stepIndex == 0) {
+                          Navigator.pop(context);
+                        } else {
+                          setState(() => _stepIndex--);
+                        }
+                      },
+                      style: OutlinedButton.styleFrom(
+                        shape: const CircleBorder(),
+                        padding: EdgeInsets.zero,
+                      ),
+                      child: const Icon(Icons.arrow_back),
+                    ),
+                  ),
+                  // Next / Finish button — filled circle
+                  SizedBox(
+                    width: 56,
+                    height: 56,
+                    child: FilledButton(
+                      onPressed: () {
+                        _saveStepData(_steps[_stepIndex]);
+                        setState(() => _stepIndex++);
+                      },
+                      style: FilledButton.styleFrom(
+                        shape: const CircleBorder(),
+                        padding: EdgeInsets.zero,
+                      ),
+                      child: Icon(
+                        _stepIndex == _steps.length - 2
+                            ? Icons.check
+                            : Icons.arrow_forward,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
     );
   }
 }
@@ -5378,6 +7737,16 @@ class _WorkoutDetailScreenState extends State<WorkoutDetailScreen> {
                 ],
                 const SizedBox(height: 16),
                 ...widget.workout.exercises.map((ex) => _buildExerciseCard(ex)),
+                if (widget.workout.notes != null && widget.workout.notes!.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  Card(
+                    child: ListTile(
+                      leading: const Icon(Icons.notes_outlined),
+                      title: Text(widget.workout.notes!),
+                      subtitle: const Text('Notes'),
+                    ),
+                  ),
+                ],
                 _SocialSection(
                   currentUserName: widget.profile.name,
                   reactions: widget.workout.reactions,
