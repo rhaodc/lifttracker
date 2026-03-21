@@ -10,12 +10,16 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:crypto/crypto.dart';
 import 'firebase_options.dart';
 
+final themeNotifier = ValueNotifier<ThemeMode>(ThemeMode.dark);
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   final prefs = await SharedPreferences.getInstance();
   final savedId = prefs.getString('currentUserId');
   final savedUsername = prefs.getString('currentUserName');
+  final savedTheme = prefs.getString('themeMode');
+  themeNotifier.value = savedTheme == 'light' ? ThemeMode.light : ThemeMode.dark;
   runApp(LiftTrackerApp(savedId: savedId, savedUsername: savedUsername));
 }
 
@@ -502,17 +506,28 @@ class LiftTrackerApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Lift Tracker',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF1565C0),
-          brightness: Brightness.dark,
+    return ValueListenableBuilder<ThemeMode>(
+      valueListenable: themeNotifier,
+      builder: (context2, mode, child) => MaterialApp(
+        title: 'Lift Tracker',
+        debugShowCheckedModeBanner: false,
+        themeMode: mode,
+        theme: ThemeData(
+          colorScheme: ColorScheme.fromSeed(
+            seedColor: const Color(0xFF1565C0),
+            brightness: Brightness.light,
+          ),
+          useMaterial3: true,
         ),
-        useMaterial3: true,
+        darkTheme: ThemeData(
+          colorScheme: ColorScheme.fromSeed(
+            seedColor: const Color(0xFF1565C0),
+            brightness: Brightness.dark,
+          ),
+          useMaterial3: true,
+        ),
+        home: _AuthGate(savedId: savedId, savedUsername: savedUsername),
       ),
-      home: _AuthGate(savedId: savedId, savedUsername: savedUsername),
     );
   }
 }
@@ -5083,6 +5098,11 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
                   SizedBox(width: 56, child: TextField(
                     controller: row.reps, keyboardType: TextInputType.number,
                     textAlign: TextAlign.center,
+                    onChanged: (v) {
+                      for (int j = rowIdx + 1; j < rows.length; j++) {
+                        rows[j].reps.value = TextEditingValue(text: v, selection: TextSelection.collapsed(offset: v.length));
+                      }
+                    },
                     decoration: const InputDecoration(isDense: true, border: OutlineInputBorder(),
                         contentPadding: EdgeInsets.symmetric(vertical: 7, horizontal: 4)),
                   )),
@@ -5091,6 +5111,11 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
                     controller: row.weight,
                     keyboardType: const TextInputType.numberWithOptions(decimal: true),
                     textAlign: TextAlign.center,
+                    onChanged: (v) {
+                      for (int j = rowIdx + 1; j < rows.length; j++) {
+                        rows[j].weight.value = TextEditingValue(text: v, selection: TextSelection.collapsed(offset: v.length));
+                      }
+                    },
                     decoration: const InputDecoration(isDense: true, border: OutlineInputBorder(),
                         contentPadding: EdgeInsets.symmetric(vertical: 7, horizontal: 4)),
                   )),
@@ -5099,6 +5124,11 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
                     controller: row.rpe,
                     keyboardType: const TextInputType.numberWithOptions(decimal: true),
                     textAlign: TextAlign.center,
+                    onChanged: (v) {
+                      for (int j = rowIdx + 1; j < rows.length; j++) {
+                        rows[j].rpe.value = TextEditingValue(text: v, selection: TextSelection.collapsed(offset: v.length));
+                      }
+                    },
                     decoration: const InputDecoration(isDense: true, border: OutlineInputBorder(),
                         contentPadding: EdgeInsets.symmetric(vertical: 7, horizontal: 4), hintText: '–'),
                   )),
@@ -5332,6 +5362,12 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
                           controller: group.perSetRepsCtrl[ex]![i],
                           keyboardType: TextInputType.number,
                           textAlign: TextAlign.center,
+                          onChanged: (v) {
+                            final rList = group.perSetRepsCtrl[ex]!;
+                            for (int j = i + 1; j < rList.length; j++) {
+                              rList[j].value = TextEditingValue(text: v, selection: TextSelection.collapsed(offset: v.length));
+                            }
+                          },
                           decoration: InputDecoration(
                             isDense: true,
                             border: const OutlineInputBorder(),
@@ -5347,9 +5383,18 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
                             textAlign: TextAlign.center,
                             onChanged: (v) {
                               final pct = double.tryParse(v);
+                              final pList = group.perSetPctCtrl[ex]!;
+                              final wList = group.perSetWeightCtrl[ex]!;
                               if (pct != null && workingMax > 0) {
-                                final calculated = (pct / 100 * workingMax).roundToDouble();
-                                group.perSetWeightCtrl[ex]![i].text = calculated.toStringAsFixed(0);
+                                final calc = (pct / 100 * workingMax).roundToDouble().toStringAsFixed(0);
+                                wList[i].value = TextEditingValue(text: calc, selection: TextSelection.collapsed(offset: calc.length));
+                              }
+                              for (int j = i + 1; j < pList.length; j++) {
+                                pList[j].value = TextEditingValue(text: v, selection: TextSelection.collapsed(offset: v.length));
+                                if (pct != null && workingMax > 0 && j < wList.length) {
+                                  final calc = (pct / 100 * workingMax).roundToDouble().toStringAsFixed(0);
+                                  wList[j].value = TextEditingValue(text: calc, selection: TextSelection.collapsed(offset: calc.length));
+                                }
                               }
                             },
                             decoration: const InputDecoration(
@@ -5366,6 +5411,12 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
                               : group.perSetWeightCtrl[ex]![i],
                           keyboardType: const TextInputType.numberWithOptions(decimal: true),
                           textAlign: TextAlign.center,
+                          onChanged: (v) {
+                            final wList = isTime ? group.perSetRpeCtrl[ex]! : group.perSetWeightCtrl[ex]!;
+                            for (int j = i + 1; j < wList.length; j++) {
+                              wList[j].value = TextEditingValue(text: v, selection: TextSelection.collapsed(offset: v.length));
+                            }
+                          },
                           decoration: InputDecoration(
                             isDense: true,
                             border: const OutlineInputBorder(),
@@ -6093,9 +6144,11 @@ Widget _buildSetsTable(BuildContext context, ProgramExercise ex, {bool showStatu
                 keyboardType: TextInputType.number,
                 textAlign: TextAlign.center,
                 style: const TextStyle(fontSize: 13),
-                onChanged: (v) => setState(() {
-                  for (int j = i + 1; j < rList.length; j++) { rList[j].text = v; }
-                }),
+                onChanged: (v) {
+                  for (int j = i + 1; j < rList.length; j++) {
+                    rList[j].value = TextEditingValue(text: v, selection: TextSelection.collapsed(offset: v.length));
+                  }
+                },
                 decoration: const InputDecoration(
                   isDense: true,
                   border: OutlineInputBorder(),
@@ -6108,9 +6161,11 @@ Widget _buildSetsTable(BuildContext context, ProgramExercise ex, {bool showStatu
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
                 textAlign: TextAlign.center,
                 style: const TextStyle(fontSize: 13),
-                onChanged: (v) => setState(() {
-                  for (int j = i + 1; j < wList.length; j++) { wList[j].text = v; }
-                }),
+                onChanged: (v) {
+                  for (int j = i + 1; j < wList.length; j++) {
+                    wList[j].value = TextEditingValue(text: v, selection: TextSelection.collapsed(offset: v.length));
+                  }
+                },
                 decoration: const InputDecoration(
                   isDense: true,
                   border: OutlineInputBorder(),
@@ -6123,9 +6178,11 @@ Widget _buildSetsTable(BuildContext context, ProgramExercise ex, {bool showStatu
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
                 textAlign: TextAlign.center,
                 style: const TextStyle(fontSize: 13),
-                onChanged: (v) => setState(() {
-                  for (int j = i + 1; j < eList.length; j++) { eList[j].text = v; }
-                }),
+                onChanged: (v) {
+                  for (int j = i + 1; j < eList.length; j++) {
+                    eList[j].value = TextEditingValue(text: v, selection: TextSelection.collapsed(offset: v.length));
+                  }
+                },
                 decoration: const InputDecoration(
                   isDense: true,
                   border: OutlineInputBorder(),
@@ -6401,11 +6458,11 @@ Widget _buildSetsTable(BuildContext context, ProgramExercise ex, {bool showStatu
                             controller: rList[i],
                             keyboardType: TextInputType.number,
                             textAlign: TextAlign.center,
-                            onChanged: (v) => setState(() {
+                            onChanged: (v) {
                               for (int j = i + 1; j < rList.length; j++) {
-                                rList[j].text = v;
+                                rList[j].value = TextEditingValue(text: v, selection: TextSelection.collapsed(offset: v.length));
                               }
-                            }),
+                            },
                             decoration: const InputDecoration(
                               isDense: true, border: OutlineInputBorder(),
                               contentPadding: EdgeInsets.symmetric(vertical: 6, horizontal: 4),
@@ -6425,9 +6482,10 @@ Widget _buildSetsTable(BuildContext context, ProgramExercise ex, {bool showStatu
                                     wList[i].text = (pct / 100 * wm).roundToDouble().toStringAsFixed(0);
                                   }
                                   for (int j = i + 1; j < pList.length; j++) {
-                                    pList[j].text = v;
+                                    pList[j].value = TextEditingValue(text: v, selection: TextSelection.collapsed(offset: v.length));
                                     if (pct != null && wm > 0 && wList.length > j) {
-                                      wList[j].text = (pct / 100 * wm).roundToDouble().toStringAsFixed(0);
+                                      final wStr = (pct / 100 * wm).roundToDouble().toStringAsFixed(0);
+                                      wList[j].value = TextEditingValue(text: wStr, selection: TextSelection.collapsed(offset: wStr.length));
                                     }
                                   }
                                 });
@@ -6443,11 +6501,11 @@ Widget _buildSetsTable(BuildContext context, ProgramExercise ex, {bool showStatu
                             controller: wList[i],
                             keyboardType: const TextInputType.numberWithOptions(decimal: true),
                             textAlign: TextAlign.center,
-                            onChanged: (v) => setState(() {
+                            onChanged: (v) {
                               for (int j = i + 1; j < wList.length; j++) {
-                                wList[j].text = v;
+                                wList[j].value = TextEditingValue(text: v, selection: TextSelection.collapsed(offset: v.length));
                               }
-                            }),
+                            },
                             decoration: const InputDecoration(
                               isDense: true, border: OutlineInputBorder(),
                               contentPadding: EdgeInsets.symmetric(vertical: 6, horizontal: 4),
@@ -7288,6 +7346,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 : const Text('Save Changes'),
           ),
           const SizedBox(height: 32),
+          const Divider(),
+          const SizedBox(height: 24),
+          const Text('Appearance',
+              style: TextStyle(fontSize: 13, color: Colors.white54, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 8),
+          ValueListenableBuilder<ThemeMode>(
+            valueListenable: themeNotifier,
+            builder: (context, mode, _) => SwitchListTile(
+              title: const Text('Light Mode'),
+              secondary: Icon(mode == ThemeMode.light ? Icons.light_mode : Icons.dark_mode),
+              value: mode == ThemeMode.light,
+              onChanged: (v) async {
+                themeNotifier.value = v ? ThemeMode.light : ThemeMode.dark;
+                final prefs = await SharedPreferences.getInstance();
+                await prefs.setString('themeMode', v ? 'light' : 'dark');
+              },
+              contentPadding: EdgeInsets.zero,
+            ),
+          ),
+          const SizedBox(height: 24),
           const Divider(),
           const SizedBox(height: 24),
           const Text('Security',
