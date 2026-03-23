@@ -2855,11 +2855,174 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
     final isBodyweight = cat == 'bodyweight' || cat == 'gymnastics';
     final isCardio = cat == 'cardio';
 
-    // Build spots from all records sorted by date
     final records = [...widget.lift.history]
       ..sort((a, b) => a.date.compareTo(b.date));
 
-    // y-axis value: reps for bodyweight, weight/value for others
+    // ── Barbell: one line per rep count ──────────────────────────────────────
+    if (!isBodyweight && !isCardio) {
+      // Palette for up to 8 distinct RM lines
+      const lineColors = [
+        Color(0xFF4FC3F7), // 1RM – light blue
+        Color(0xFF81C784), // 2RM – green
+        Color(0xFFFFB74D), // 3RM – orange
+        Color(0xFFE57373), // 4RM – red
+        Color(0xFFBA68C8), // 5RM – purple
+        Color(0xFF4DB6AC), // 6RM – teal
+        Color(0xFFF06292), // 8RM – pink
+        Color(0xFFFFD54F), // 10RM+ – amber
+      ];
+
+      // Group records by reps, sorted ascending
+      final repGroups = <int, List<RepRecord>>{};
+      for (final r in records) {
+        repGroups.putIfAbsent(r.reps, () => []).add(r);
+      }
+      final sortedReps = repGroups.keys.toList()..sort();
+
+      // Build spots per group
+      final seriesList = <({int reps, List<FlSpot> spots, List<RepRecord> recs})>[];
+      for (final reps in sortedReps) {
+        final recs = repGroups[reps]!;
+        final spots = recs.map((r) =>
+            FlSpot(r.date.millisecondsSinceEpoch / 86400000.0, r.weight)).toList();
+        if (spots.isNotEmpty) seriesList.add((reps: reps, spots: spots, recs: recs));
+      }
+      if (seriesList.isEmpty) return const SizedBox.shrink();
+
+      final allWeights = seriesList.expand((s) => s.recs.map((r) => r.weight)).toList();
+      final minY = allWeights.reduce(min);
+      final maxY = allWeights.reduce(max);
+      final yPadding = max((maxY - minY) * 0.15, 10.0);
+
+      final allSpots = seriesList.expand((s) => s.spots).toList();
+      final xInterval = allSpots.length > 1
+          ? (allSpots.map((s) => s.x).reduce(max) - allSpots.map((s) => s.x).reduce(min)) /
+              (allSpots.length > 4 ? 3 : allSpots.length - 1)
+          : 1.0;
+
+      final bars = seriesList.asMap().entries.map((e) {
+        final color = lineColors[e.key % lineColors.length];
+        final s = e.value;
+        return LineChartBarData(
+          spots: s.spots,
+          isCurved: true,
+          curveSmoothness: 0.3,
+          color: color,
+          barWidth: 2.5,
+          dotData: FlDotData(
+            show: true,
+            getDotPainter: (spot, pct, bar, idx) => FlDotCirclePainter(
+              radius: 4,
+              color: color,
+              strokeWidth: 2,
+              strokeColor: Colors.white,
+            ),
+          ),
+          belowBarData: BarAreaData(show: false),
+        );
+      }).toList();
+
+      return Card(
+        margin: const EdgeInsets.only(bottom: 12),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(8, 16, 16, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(left: 12, bottom: 8),
+                child: Text('Weight Progress by RM',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: _w70)),
+              ),
+              // Legend
+              Padding(
+                padding: const EdgeInsets.only(left: 12, bottom: 12),
+                child: Wrap(
+                  spacing: 12,
+                  runSpacing: 6,
+                  children: seriesList.asMap().entries.map((e) {
+                    final color = lineColors[e.key % lineColors.length];
+                    final label = e.value.reps == 1 ? '1RM' : '${e.value.reps}RM';
+                    return Row(mainAxisSize: MainAxisSize.min, children: [
+                      Container(width: 14, height: 3, color: color),
+                      const SizedBox(width: 5),
+                      Text(label, style: TextStyle(fontSize: 11, color: _w54)),
+                    ]);
+                  }).toList(),
+                ),
+              ),
+              SizedBox(
+                height: 200,
+                child: LineChart(
+                  LineChartData(
+                    minY: minY - yPadding,
+                    maxY: maxY + yPadding,
+                    gridData: FlGridData(
+                      show: true,
+                      drawVerticalLine: false,
+                      getDrawingHorizontalLine: (_) =>
+                          const FlLine(color: Colors.white12, strokeWidth: 1),
+                    ),
+                    borderData: FlBorderData(show: false),
+                    titlesData: FlTitlesData(
+                      leftTitles: AxisTitles(
+                        sideTitles: SideTitles(
+                          showTitles: true,
+                          reservedSize: 44,
+                          getTitlesWidget: (v, _) => Text(v.toInt().toString(),
+                              style: TextStyle(fontSize: 11, color: _w54)),
+                        ),
+                      ),
+                      bottomTitles: AxisTitles(
+                        sideTitles: SideTitles(
+                          showTitles: true,
+                          reservedSize: 28,
+                          interval: xInterval,
+                          getTitlesWidget: (value, _) {
+                            final date = DateTime.fromMillisecondsSinceEpoch(
+                                (value * 86400000).toInt());
+                            const months = ['Jan','Feb','Mar','Apr','May','Jun',
+                                            'Jul','Aug','Sep','Oct','Nov','Dec'];
+                            return Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: Text('${months[date.month - 1]} ${date.day}',
+                                  style: TextStyle(fontSize: 10, color: _w54)),
+                            );
+                          },
+                        ),
+                      ),
+                      rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                      topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                    ),
+                    lineBarsData: bars,
+                    lineTouchData: LineTouchData(
+                      touchTooltipData: LineTouchTooltipData(
+                        getTooltipItems: (touchedSpots) => touchedSpots.map((s) {
+                          final series = seriesList[s.barIndex];
+                          final rec = series.recs[s.spotIndex];
+                          final w = rec.weight % 1 == 0
+                              ? rec.weight.toInt().toString()
+                              : rec.weight.toStringAsFixed(1);
+                          return LineTooltipItem(
+                            '${series.reps}RM  ·  $w ${rec.unit}\n${_formatDate(rec.date)}',
+                            TextStyle(
+                                fontSize: 12,
+                                color: lineColors[s.barIndex % lineColors.length],
+                                fontWeight: FontWeight.w500),
+                          );
+                        }).toList(),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // ── Bodyweight / Cardio: single line (unchanged) ──────────────────────────
     final spots = records.map((r) {
       final daysSinceEpoch = r.date.millisecondsSinceEpoch / 86400000.0;
       return FlSpot(daysSinceEpoch, isBodyweight ? r.reps.toDouble() : r.weight);
@@ -2872,7 +3035,7 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
     final minY = yVals.reduce(min);
     final maxY = yVals.reduce(max);
     final yPadding = max((maxY - minY) * 0.15, 10.0);
-    final chartLabel = isBodyweight ? 'Reps Progress' : isCardio ? 'Performance Progress' : 'Weight Progress';
+    final chartLabel = isBodyweight ? 'Reps Progress' : 'Performance Progress';
 
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
@@ -2882,10 +3045,9 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Padding(
-              padding: EdgeInsets.only(left: 12, bottom: 12),
+              padding: const EdgeInsets.only(left: 12, bottom: 12),
               child: Text(chartLabel,
-                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600,
-                      color: _w70)),
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: _w70)),
             ),
             SizedBox(
               height: 200,
@@ -2896,10 +3058,8 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
                   gridData: FlGridData(
                     show: true,
                     drawVerticalLine: false,
-                    getDrawingHorizontalLine: (_) => FlLine(
-                      color: Colors.white12,
-                      strokeWidth: 1,
-                    ),
+                    getDrawingHorizontalLine: (_) =>
+                        const FlLine(color: Colors.white12, strokeWidth: 1),
                   ),
                   borderData: FlBorderData(show: false),
                   titlesData: FlTitlesData(
@@ -2907,11 +3067,8 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
                       sideTitles: SideTitles(
                         showTitles: true,
                         reservedSize: 44,
-                        getTitlesWidget: (value, meta) => Text(
-                          value.toInt().toString(),
-                          style: TextStyle(
-                              fontSize: 11, color: _w54),
-                        ),
+                        getTitlesWidget: (value, _) => Text(value.toInt().toString(),
+                            style: TextStyle(fontSize: 11, color: _w54)),
                       ),
                     ),
                     bottomTitles: AxisTitles(
@@ -2922,28 +3079,21 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
                             ? (spots.last.x - spots.first.x) /
                                 (spots.length > 4 ? 3 : spots.length - 1)
                             : 1,
-                        getTitlesWidget: (value, meta) {
+                        getTitlesWidget: (value, _) {
                           final date = DateTime.fromMillisecondsSinceEpoch(
                               (value * 86400000).toInt());
-                          const months = [
-                            'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-                            'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
-                          ];
+                          const months = ['Jan','Feb','Mar','Apr','May','Jun',
+                                          'Jul','Aug','Sep','Oct','Nov','Dec'];
                           return Padding(
                             padding: const EdgeInsets.only(top: 4),
-                            child: Text(
-                              '${months[date.month - 1]} ${date.day}',
-                              style: TextStyle(
-                                  fontSize: 10, color: _w54),
-                            ),
+                            child: Text('${months[date.month - 1]} ${date.day}',
+                                style: TextStyle(fontSize: 10, color: _w54)),
                           );
                         },
                       ),
                     ),
-                    rightTitles: const AxisTitles(
-                        sideTitles: SideTitles(showTitles: false)),
-                    topTitles: const AxisTitles(
-                        sideTitles: SideTitles(showTitles: false)),
+                    rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                    topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
                   ),
                   lineBarsData: [
                     LineChartBarData(
@@ -2954,8 +3104,7 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
                       barWidth: 2.5,
                       dotData: FlDotData(
                         show: true,
-                        getDotPainter: (spot, percent, bar, index) =>
-                            FlDotCirclePainter(
+                        getDotPainter: (spot, pct, bar, idx) => FlDotCirclePainter(
                           radius: 4,
                           color: Theme.of(context).colorScheme.primary,
                           strokeWidth: 2,
@@ -2964,17 +3113,13 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
                       ),
                       belowBarData: BarAreaData(
                         show: true,
-                        color: Theme.of(context)
-                            .colorScheme
-                            .primary
-                            .withValues(alpha: 0.15),
+                        color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.15),
                       ),
                     ),
                   ],
                   lineTouchData: LineTouchData(
                     touchTooltipData: LineTouchTooltipData(
-                      getTooltipItems: (touchedSpots) =>
-                          touchedSpots.map((s) {
+                      getTooltipItems: (touchedSpots) => touchedSpots.map((s) {
                         final date = DateTime.fromMillisecondsSinceEpoch(
                             (s.x * 86400000).toInt());
                         final rec = records.firstWhere(
@@ -2982,19 +3127,13 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
                                 r.date.month == date.month &&
                                 r.date.year == date.year,
                             orElse: () => records[s.spotIndex]);
-                        String valStr;
-                        if (isBodyweight) {
-                          valStr = '${rec.reps} reps';
-                        } else {
-                          final w = rec.weight % 1 == 0 ? rec.weight.toInt().toString() : rec.weight.toStringAsFixed(1);
-                          valStr = isCardio ? '$w ${rec.unit}' : '$w ${rec.unit} · ${rec.reps}RM';
-                        }
+                        final w = rec.weight % 1 == 0
+                            ? rec.weight.toInt().toString()
+                            : rec.weight.toStringAsFixed(1);
+                        final valStr = isBodyweight ? '${rec.reps} reps' : '$w ${rec.unit}';
                         return LineTooltipItem(
                           '$valStr\n${_formatDate(date)}',
-                          TextStyle(
-                              fontSize: 12,
-                              color: _wt,
-                              fontWeight: FontWeight.w500),
+                          TextStyle(fontSize: 12, color: _wt, fontWeight: FontWeight.w500),
                         );
                       }).toList(),
                     ),
