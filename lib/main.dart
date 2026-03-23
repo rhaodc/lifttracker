@@ -2858,69 +2858,22 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
     final records = [...widget.lift.history]
       ..sort((a, b) => a.date.compareTo(b.date));
 
-    // ── Barbell: one line per rep count ──────────────────────────────────────
+    // ── Barbell: 1RM progression only ────────────────────────────────────────
     if (!isBodyweight && !isCardio) {
-      // Palette for up to 8 distinct RM lines
-      const lineColors = [
-        Color(0xFF4FC3F7), // 1RM – light blue
-        Color(0xFF81C784), // 2RM – green
-        Color(0xFFFFB74D), // 3RM – orange
-        Color(0xFFE57373), // 4RM – red
-        Color(0xFFBA68C8), // 5RM – purple
-        Color(0xFF4DB6AC), // 6RM – teal
-        Color(0xFFF06292), // 8RM – pink
-        Color(0xFFFFD54F), // 10RM+ – amber
-      ];
+      final oneRMRecords = records.where((r) => r.reps == 1).toList();
+      if (oneRMRecords.isEmpty) return const SizedBox.shrink();
 
-      // Group records by reps, sorted ascending
-      final repGroups = <int, List<RepRecord>>{};
-      for (final r in records) {
-        repGroups.putIfAbsent(r.reps, () => []).add(r);
-      }
-      final sortedReps = repGroups.keys.toList()..sort();
-
-      // Build spots per group
-      final seriesList = <({int reps, List<FlSpot> spots, List<RepRecord> recs})>[];
-      for (final reps in sortedReps) {
-        final recs = repGroups[reps]!;
-        final spots = recs.map((r) =>
-            FlSpot(r.date.millisecondsSinceEpoch / 86400000.0, r.weight)).toList();
-        if (spots.isNotEmpty) seriesList.add((reps: reps, spots: spots, recs: recs));
-      }
-      if (seriesList.isEmpty) return const SizedBox.shrink();
-
-      final allWeights = seriesList.expand((s) => s.recs.map((r) => r.weight)).toList();
-      final minY = allWeights.reduce(min);
-      final maxY = allWeights.reduce(max);
+      final spots = oneRMRecords
+          .map((r) => FlSpot(r.date.millisecondsSinceEpoch / 86400000.0, r.weight))
+          .toList();
+      final weights = oneRMRecords.map((r) => r.weight).toList();
+      final minY = weights.reduce(min);
+      final maxY = weights.reduce(max);
       final yPadding = max((maxY - minY) * 0.15, 10.0);
-
-      final allSpots = seriesList.expand((s) => s.spots).toList();
-      final xInterval = allSpots.length > 1
-          ? (allSpots.map((s) => s.x).reduce(max) - allSpots.map((s) => s.x).reduce(min)) /
-              (allSpots.length > 4 ? 3 : allSpots.length - 1)
+      final xInterval = spots.length > 1
+          ? (spots.last.x - spots.first.x) / (spots.length > 4 ? 3 : spots.length - 1)
           : 1.0;
-
-      final bars = seriesList.asMap().entries.map((e) {
-        final color = lineColors[e.key % lineColors.length];
-        final s = e.value;
-        return LineChartBarData(
-          spots: s.spots,
-          isCurved: true,
-          curveSmoothness: 0.3,
-          color: color,
-          barWidth: 2.5,
-          dotData: FlDotData(
-            show: true,
-            getDotPainter: (spot, pct, bar, idx) => FlDotCirclePainter(
-              radius: 4,
-              color: color,
-              strokeWidth: 2,
-              strokeColor: Colors.white,
-            ),
-          ),
-          belowBarData: BarAreaData(show: false),
-        );
-      }).toList();
+      final color = Theme.of(context).colorScheme.primary;
 
       return Card(
         margin: const EdgeInsets.only(bottom: 12),
@@ -2930,26 +2883,9 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Padding(
-                padding: const EdgeInsets.only(left: 12, bottom: 8),
-                child: Text('Weight Progress by RM',
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: _w70)),
-              ),
-              // Legend
-              Padding(
                 padding: const EdgeInsets.only(left: 12, bottom: 12),
-                child: Wrap(
-                  spacing: 12,
-                  runSpacing: 6,
-                  children: seriesList.asMap().entries.map((e) {
-                    final color = lineColors[e.key % lineColors.length];
-                    final label = e.value.reps == 1 ? '1RM' : '${e.value.reps}RM';
-                    return Row(mainAxisSize: MainAxisSize.min, children: [
-                      Container(width: 14, height: 3, color: color),
-                      const SizedBox(width: 5),
-                      Text(label, style: TextStyle(fontSize: 11, color: _w54)),
-                    ]);
-                  }).toList(),
-                ),
+                child: Text('1RM Progress',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: _w70)),
               ),
               SizedBox(
                 height: 200,
@@ -2994,20 +2930,40 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
                       rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
                       topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
                     ),
-                    lineBarsData: bars,
+                    lineBarsData: [
+                      LineChartBarData(
+                        spots: spots,
+                        isCurved: true,
+                        curveSmoothness: 0.3,
+                        color: color,
+                        barWidth: 2.5,
+                        dotData: FlDotData(
+                          show: true,
+                          getDotPainter: (spot, pct, bar, idx) => FlDotCirclePainter(
+                            radius: 4,
+                            color: color,
+                            strokeWidth: 2,
+                            strokeColor: Colors.white,
+                          ),
+                        ),
+                        belowBarData: BarAreaData(
+                          show: true,
+                          color: color.withValues(alpha: 0.15),
+                        ),
+                      ),
+                    ],
                     lineTouchData: LineTouchData(
                       touchTooltipData: LineTouchTooltipData(
                         getTooltipItems: (touchedSpots) => touchedSpots.map((s) {
-                          final series = seriesList[s.barIndex];
-                          final rec = series.recs[s.spotIndex];
+                          final rec = oneRMRecords[s.spotIndex];
                           final w = rec.weight % 1 == 0
                               ? rec.weight.toInt().toString()
                               : rec.weight.toStringAsFixed(1);
                           return LineTooltipItem(
-                            '${series.reps}RM  ·  $w ${rec.unit}\n${_formatDate(rec.date)}',
+                            '1RM  ·  $w ${rec.unit}\n${_formatDate(rec.date)}',
                             TextStyle(
                                 fontSize: 12,
-                                color: lineColors[s.barIndex % lineColors.length],
+                                color: color,
                                 fontWeight: FontWeight.w500),
                           );
                         }).toList(),
