@@ -6233,7 +6233,7 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
       'forTime' => 'For Time',
       _ => 'Group',
     };
-    final suffix = type == 'amrap' ? '$total min' : type == 'forRounds' ? '×$total rounds' : type == 'forTime' ? '${total}min' : '×$total';
+    final suffix = type == 'amrap' ? '$total min' : type == 'forRounds' ? '×$total rounds' : type == 'forTime' ? '${interval}min' : '×$total';
     return '$prefix $suffix: $names';
   }
 
@@ -6890,7 +6890,7 @@ Widget _buildSetsTable(BuildContext context, ProgramExercise ex, {bool showStatu
                   return _buildInfoField('Rounds', '$totalSets', 'rounds');
                 }
                 if (type == 'forTime') {
-                  return _buildInfoField('Time Cap', '$totalSets', 'min');
+                  return _buildInfoField('Time Cap', '$intervalMin', 'min');
                 }
                 return _buildInfoField('Time cap', '$totalSets', 'min');
               }
@@ -6932,7 +6932,7 @@ Widget _buildSetsTable(BuildContext context, ProgramExercise ex, {bool showStatu
               }
               if (type == 'forTime') {
                 return TextField(
-                  controller: tSetsCtrl,
+                  controller: iMinCtrl,
                   keyboardType: TextInputType.number,
                   decoration: const InputDecoration(
                     labelText: 'Time Cap',
@@ -7372,7 +7372,7 @@ Widget _buildSetsTable(BuildContext context, ProgramExercise ex, {bool showStatu
           return name != null ? '$name: $label' : label;
         }
         if (ex.groupType == 'forTime') {
-          final cap = ex.groupTotalSets ?? 20;
+          final cap = ex.groupIntervalMin ?? 20;
           final label = 'For Time ${cap}min';
           return name != null ? '$name: $label' : label;
         }
