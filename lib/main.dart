@@ -12,6 +12,16 @@ import 'firebase_options.dart';
 
 final themeNotifier = ValueNotifier<ThemeMode>(ThemeMode.dark);
 
+// Adaptive text colors — automatically returns dark-mode or light-mode variant
+// depending on the current themeNotifier value. Rebuilds correctly because the
+// entire widget tree is under a ValueListenableBuilder on themeNotifier.
+bool get _isLight => themeNotifier.value == ThemeMode.light;
+Color get _w38 => _isLight ? Colors.black38  : const Color(0x61FFFFFF);
+Color get _w54 => _isLight ? Colors.black54  : const Color(0x8AFFFFFF);
+Color get _w60 => _isLight ? Colors.black54  : const Color(0x99FFFFFF);
+Color get _w70 => _isLight ? Colors.black87  : const Color(0xB3FFFFFF);
+Color get _wt  => _isLight ? Colors.black    : Colors.white;
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
@@ -55,6 +65,7 @@ class RepRecord {
 
 class Lift {
   String name;
+  String category; // 'barbell', 'bodyweight', 'gymnastics', 'cardio'
   List<RepRecord> history; // every logged record
   Map<int, RepRecord> bests; // best weight per rep count (computed)
   List<Comment> comments;
@@ -62,6 +73,7 @@ class Lift {
 
   Lift({
     required this.name,
+    this.category = 'barbell',
     List<RepRecord>? history,
     Map<int, RepRecord>? bests,
     List<Comment>? comments,
@@ -74,14 +86,32 @@ class Lift {
   /// Rebuild `bests` from the full `history`.
   void recomputeBests() {
     bests.clear();
-    for (final r in history) {
-      final cur = bests[r.reps];
-      if (cur == null || r.weight > cur.weight) bests[r.reps] = r;
+    if (category == 'bodyweight' || category == 'gymnastics') {
+      // Track record with highest rep count
+      RepRecord? best;
+      for (final r in history) {
+        if (best == null || r.reps > best.reps) best = r;
+      }
+      if (best != null) bests[best.reps] = best;
+    } else if (category == 'cardio') {
+      // Track record with highest value (stored in weight field)
+      RepRecord? best;
+      for (final r in history) {
+        if (best == null || r.weight > best.weight) best = r;
+      }
+      if (best != null) bests[0] = best;
+    } else {
+      // Barbell: best weight per rep count
+      for (final r in history) {
+        final cur = bests[r.reps];
+        if (cur == null || r.weight > cur.weight) bests[r.reps] = r;
+      }
     }
   }
 
   Map<String, dynamic> toJson() => {
         'name': name,
+        'category': category,
         'history': history.map((r) => r.toJson()).toList(),
         'bests': bests.map((k, v) => MapEntry(k.toString(), v.toJson())),
         'comments': comments.map((c) => c.toJson()).toList(),
@@ -100,6 +130,7 @@ class Lift {
     }
     final lift = Lift(
       name: j['name'] as String,
+      category: j['category'] as String? ?? 'barbell',
       history: history,
       comments: (j['comments'] as List<dynamic>? ?? [])
           .map((e) => Comment.fromJson(e as Map<String, dynamic>))
@@ -513,10 +544,42 @@ class LiftTrackerApp extends StatelessWidget {
         debugShowCheckedModeBanner: false,
         themeMode: mode,
         theme: ThemeData(
-          colorScheme: ColorScheme.fromSeed(
-            seedColor: const Color(0xFF1565C0),
+          colorScheme: const ColorScheme(
             brightness: Brightness.light,
+            // Primary: deep forest green #295A39
+            primary: Color(0xFF295A39),
+            onPrimary: Colors.white,
+            primaryContainer: Color(0xFFB7DFC4),
+            onPrimaryContainer: Color(0xFF00210C),
+            // Secondary: warm sage green
+            secondary: Color(0xFF4E7A5C),
+            onSecondary: Colors.white,
+            secondaryContainer: Color(0xFFCFEDD9),
+            onSecondaryContainer: Color(0xFF0B2118),
+            // Tertiary: muted olive/gold complement
+            tertiary: Color(0xFF7A6E40),
+            onTertiary: Colors.white,
+            tertiaryContainer: Color(0xFFEFE2B0),
+            onTertiaryContainer: Color(0xFF261E00),
+            // Error
+            error: Color(0xFFBA1A1A),
+            onError: Colors.white,
+            errorContainer: Color(0xFFFFDAD6),
+            onErrorContainer: Color(0xFF410002),
+            // Surfaces: white background, black text
+            surface: Colors.white,
+            onSurface: Colors.black,
+            surfaceContainerHighest: Color(0xFFE8F5EC),
+            onSurfaceVariant: Color(0xFF1A1A1A),
+            outline: Color(0xFF295A39),
+            outlineVariant: Color(0xFFB7DFC4),
+            shadow: Colors.black,
+            scrim: Colors.black,
+            inverseSurface: Color(0xFF2D3B31),
+            onInverseSurface: Color(0xFFEDF4EE),
+            inversePrimary: Color(0xFF9CCFAA),
           ),
+          scaffoldBackgroundColor: Colors.white,
           useMaterial3: true,
         ),
         darkTheme: ThemeData(
@@ -685,9 +748,9 @@ class _SignInScreenState extends State<SignInScreen> {
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text(
+              Text(
                 'This account has no password yet. Create one to continue.',
-                style: TextStyle(fontSize: 13, color: Colors.white60),
+                style: TextStyle(fontSize: 13, color: _w60),
               ),
               const SizedBox(height: 16),
               TextField(
@@ -760,8 +823,8 @@ class _SignInScreenState extends State<SignInScreen> {
                 const Text('Lift Tracker',
                     style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 8),
-                const Text('Sign in to continue',
-                    style: TextStyle(fontSize: 14, color: Colors.white54)),
+                Text('Sign in to continue',
+                    style: TextStyle(fontSize: 14, color: _w54)),
                 const SizedBox(height: 40),
                 TextField(
                   controller: _userCtrl,
@@ -818,10 +881,10 @@ class _SignInScreenState extends State<SignInScreen> {
                 Row(
                   children: [
                     const Expanded(child: Divider()),
-                    const Padding(
+                    Padding(
                       padding: EdgeInsets.symmetric(horizontal: 12),
                       child: Text('or',
-                          style: TextStyle(color: Colors.white38)),
+                          style: TextStyle(color: _w38)),
                     ),
                     const Expanded(child: Divider()),
                   ],
@@ -948,9 +1011,9 @@ class _CreateProfileScreenState extends State<CreateProfileScreen> {
               children: [
                 Icon(Icons.person_add, size: 56, color: cs.primary),
                 const SizedBox(height: 12),
-                const Text('Set up your account',
+                Text('Set up your account',
                     textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 16, color: Colors.white54)),
+                    style: TextStyle(fontSize: 16, color: _w54)),
                 const SizedBox(height: 32),
                 TextField(
                   controller: _userCtrl,
@@ -1153,11 +1216,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
           }
           final profiles = snapshot.data ?? [];
           if (profiles.isEmpty) {
-            return const Center(
+            return Center(
               child: Text(
                 'No profiles yet.\nTap + to create one.',
                 textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 16, color: Colors.white54),
+                style: TextStyle(fontSize: 16, color: _w54),
               ),
             );
           }
@@ -1221,8 +1284,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       const SizedBox(height: 4),
                       Text(
                         '${profile.lifts.length} lift${profile.lifts.length == 1 ? '' : 's'}',
-                        style: const TextStyle(
-                            fontSize: 13, color: Colors.white54),
+                        style: TextStyle(
+                            fontSize: 13, color: _w54),
                       ),
                     ],
                   ),
@@ -1308,35 +1371,73 @@ class _HomeScreenState extends State<HomeScreen>
 
   void _addLift() {
     final controller = TextEditingController();
+    String category = 'barbell';
+    final categories = ['barbell', 'bodyweight', 'gymnastics', 'cardio'];
+    final categoryLabels = {
+      'barbell': 'Barbell',
+      'bodyweight': 'Bodyweight',
+      'gymnastics': 'Gymnastics',
+      'cardio': 'Cardio',
+    };
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('New Lift'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          textCapitalization: TextCapitalization.words,
-          decoration: const InputDecoration(hintText: 'e.g. Back Squat'),
-          onSubmitted: (_) => _confirmAdd(controller.text),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel')),
-          FilledButton(
-            onPressed: () => _confirmAdd(controller.text),
-            child: const Text('Add'),
+      builder: (_) => StatefulBuilder(
+        builder: (ctx, setDlg) => AlertDialog(
+          title: const Text('New Lift'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              DropdownButtonFormField<String>(
+                initialValue: category,
+                decoration: const InputDecoration(
+                  labelText: 'Category',
+                  border: OutlineInputBorder(),
+                ),
+                items: categories.map((c) => DropdownMenuItem(
+                  value: c,
+                  child: Text(categoryLabels[c]!),
+                )).toList(),
+                onChanged: (v) { if (v != null) setDlg(() => category = v); },
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: controller,
+                autofocus: true,
+                textCapitalization: TextCapitalization.words,
+                decoration: InputDecoration(
+                  labelText: 'Name',
+                  hintText: switch (category) {
+                    'barbell' => 'e.g. Back Squat',
+                    'bodyweight' => 'e.g. Pull Up',
+                    'gymnastics' => 'e.g. Muscle Up',
+                    'cardio' => 'e.g. Row 1000m',
+                    _ => 'Exercise name',
+                  },
+                  border: const OutlineInputBorder(),
+                ),
+                onSubmitted: (_) => _confirmAdd(controller.text, category),
+              ),
+            ],
           ),
-        ],
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancel')),
+            FilledButton(
+              onPressed: () => _confirmAdd(controller.text, category),
+              child: const Text('Add'),
+            ),
+          ],
+        ),
       ),
     );
   }
 
-  void _confirmAdd(String name) {
+  void _confirmAdd(String name, [String category = 'barbell']) {
     name = name.trim();
     if (name.isEmpty) return;
     Navigator.pop(context);
-    setState(() => lifts.add(Lift(name: name)));
+    setState(() => lifts.add(Lift(name: name, category: category)));
     widget.onChanged();
   }
 
@@ -1365,6 +1466,19 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   String _subtitle(Lift lift) {
+    if (lift.history.isEmpty) return 'No records yet';
+    final cat = lift.category;
+    if (cat == 'bodyweight' || cat == 'gymnastics') {
+      final maxReps = lift.history.map((r) => r.reps).reduce(max);
+      return 'Best: $maxReps reps';
+    }
+    if (cat == 'cardio') {
+      final best = lift.bests[0];
+      if (best == null) return 'No records yet';
+      final v = best.weight % 1 == 0 ? best.weight.toInt().toString() : best.weight.toStringAsFixed(1);
+      return 'Best: $v ${best.unit}';
+    }
+    // Barbell
     if (lift.bests.isEmpty) return 'No records yet';
     final sorted = lift.bests.entries.toList()
       ..sort((a, b) => a.key.compareTo(b.key));
@@ -1457,7 +1571,7 @@ class _HomeScreenState extends State<HomeScreen>
           tabs: const [
             Tab(text: 'Dashboard'),
             Tab(text: 'Lifts'),
-            Tab(text: 'Workouts'),
+            Tab(text: 'Training'),
             Tab(text: 'Community'),
           ],
         ),
@@ -1661,10 +1775,10 @@ class _HomeScreenState extends State<HomeScreen>
           _sectionHeader('Recent Lifts', Icons.fitness_center),
           const SizedBox(height: 8),
           if (liftsWithDate.isEmpty)
-            const Padding(
+            Padding(
               padding: EdgeInsets.only(bottom: 16),
               child: Text('No lifts logged yet.',
-                  style: TextStyle(color: Colors.white54)),
+                  style: TextStyle(color: _w54)),
             )
           else
             ...liftsWithDate.take(5).map((item) {
@@ -1682,8 +1796,8 @@ class _HomeScreenState extends State<HomeScreen>
                     _reactionSummary(lift.reactions),
                   ]),
                   subtitle: Text(_subtitle(lift),
-                      style: const TextStyle(
-                          fontSize: 12, color: Colors.white60)),
+                      style: TextStyle(
+                          fontSize: 12, color: _w60)),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () async {
                     await Navigator.push(
@@ -1708,10 +1822,10 @@ class _HomeScreenState extends State<HomeScreen>
           _sectionHeader('Recent Workouts', Icons.calendar_today_outlined),
           const SizedBox(height: 8),
           if (sortedWorkouts.isEmpty)
-            const Padding(
+            Padding(
               padding: EdgeInsets.only(bottom: 16),
               child: Text('No workouts logged yet.',
-                  style: TextStyle(color: Colors.white54)),
+                  style: TextStyle(color: _w54)),
             )
           else
             ...sortedWorkouts.take(5).map((workout) {
@@ -1746,8 +1860,8 @@ class _HomeScreenState extends State<HomeScreen>
                   ]),
                   subtitle: Text(
                       exerciseNames.isEmpty ? 'No exercises' : exerciseNames,
-                      style: const TextStyle(
-                          fontSize: 12, color: Colors.white60),
+                      style: TextStyle(
+                          fontSize: 12, color: _w60),
                       overflow: TextOverflow.ellipsis),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () => Navigator.push(
@@ -1769,17 +1883,17 @@ class _HomeScreenState extends State<HomeScreen>
           _sectionHeader('Goals', Icons.flag_outlined),
           const SizedBox(height: 8),
           if (widget.profile.goals.isEmpty)
-            const Text('No goals set.',
-                style: TextStyle(color: Colors.white54))
+            Text('No goals set.',
+                style: TextStyle(color: _w54))
           else
             ...widget.profile.goals.map((goal) => Padding(
                   padding: const EdgeInsets.only(bottom: 8),
                   child: Row(children: [
-                    const Text('• ', style: TextStyle(color: Colors.white70)),
+                    Text('• ', style: TextStyle(color: _w70)),
                     Expanded(
                         child: Text(goal,
-                            style: const TextStyle(
-                                fontSize: 14, color: Colors.white70))),
+                            style: TextStyle(
+                                fontSize: 14, color: _w70))),
                   ]),
                 )),
         ],
@@ -1825,7 +1939,7 @@ class _HomeScreenState extends State<HomeScreen>
           // Greeting
           Text(
             '$greeting,',
-            style: const TextStyle(fontSize: 16, color: Colors.white60),
+            style: TextStyle(fontSize: 16, color: _w60),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 8),
@@ -1882,9 +1996,9 @@ class _HomeScreenState extends State<HomeScreen>
           // Quote
           Text(
             quote,
-            style: const TextStyle(
+            style: TextStyle(
                 fontSize: 14,
-                color: Colors.white54,
+                color: _w54,
                 fontStyle: FontStyle.italic),
             textAlign: TextAlign.center,
           ),
@@ -1909,15 +2023,15 @@ class _HomeScreenState extends State<HomeScreen>
                                 size: 16,
                                 color: Theme.of(context).colorScheme.primary),
                             const SizedBox(width: 6),
-                            const Text('Recent Lift',
+                            Text('Recent Lift',
                                 style: TextStyle(
-                                    fontSize: 12, color: Colors.white54)),
+                                    fontSize: 12, color: _w54)),
                           ]),
                           const SizedBox(height: 12),
                           if (mostRecent == null)
-                            const Text('No lifts logged yet.',
+                            Text('No lifts logged yet.',
                                 style: TextStyle(
-                                    fontSize: 13, color: Colors.white54))
+                                    fontSize: 13, color: _w54))
                           else ...[
                             Text(mostRecentName!,
                                 style: const TextStyle(
@@ -1940,8 +2054,8 @@ class _HomeScreenState extends State<HomeScreen>
                             const SizedBox(height: 6),
                             Text(
                               _fmtDate(mostRecent.date),
-                              style: const TextStyle(
-                                  fontSize: 12, color: Colors.white38),
+                              style: TextStyle(
+                                  fontSize: 12, color: _w38),
                             ),
                           ],
                         ],
@@ -1965,10 +2079,10 @@ class _HomeScreenState extends State<HomeScreen>
                                   size: 13,
                                   color: Theme.of(context).colorScheme.primary),
                               const SizedBox(width: 4),
-                              const Expanded(
+                              Expanded(
                                 child: Text('Goals',
                                     style: TextStyle(
-                                        fontSize: 11, color: Colors.white54)),
+                                        fontSize: 11, color: _w54)),
                               ),
                               GestureDetector(
                                 onTap: _addGoal,
@@ -1980,9 +2094,9 @@ class _HomeScreenState extends State<HomeScreen>
                           ),
                           const SizedBox(height: 6),
                           if (widget.profile.goals.isEmpty)
-                            const Text('Tap + to add',
+                            Text('Tap + to add',
                                 style: TextStyle(
-                                    fontSize: 11, color: Colors.white38))
+                                    fontSize: 11, color: _w38))
                           else
                             ...widget.profile.goals.asMap().entries.map(
                                   (e) => Padding(
@@ -1991,15 +2105,15 @@ class _HomeScreenState extends State<HomeScreen>
                                       crossAxisAlignment:
                                           CrossAxisAlignment.start,
                                       children: [
-                                        const Text('• ',
+                                        Text('• ',
                                             style: TextStyle(
                                                 fontSize: 12,
-                                                color: Colors.white60)),
+                                                color: _w60)),
                                         Expanded(
                                           child: Text(e.value,
-                                              style: const TextStyle(
+                                              style: TextStyle(
                                                   fontSize: 12,
-                                                  color: Colors.white70)),
+                                                  color: _w70)),
                                         ),
                                         GestureDetector(
                                           onTap: () => _removeGoal(e.key),
@@ -2029,8 +2143,8 @@ class _HomeScreenState extends State<HomeScreen>
                       size: 16,
                       color: Theme.of(context).colorScheme.primary),
                   const SizedBox(width: 8),
-                  const Text('Weekly Workouts',
-                      style: TextStyle(fontSize: 13, color: Colors.white54)),
+                  Text('Weekly Workouts',
+                      style: TextStyle(fontSize: 13, color: _w54)),
                   const Spacer(),
                   GestureDetector(
                     onTap: _editWeeklyGoal,
@@ -2056,10 +2170,10 @@ class _HomeScreenState extends State<HomeScreen>
                               ),
                               TextSpan(
                                 text: '/${widget.profile.weeklyWorkoutGoal}',
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 22,
                                   fontWeight: FontWeight.w500,
-                                  color: Colors.white38,
+                                  color: _w38,
                                   height: 1,
                                 ),
                               ),
@@ -2098,11 +2212,11 @@ class _HomeScreenState extends State<HomeScreen>
   Widget _buildLiftsTab() {
     final isOwn = widget.profile.id == widget.currentUserId;
     if (lifts.isEmpty) {
-      return const Center(
+      return Center(
         child: Text(
           'No lifts yet.\nTap + to add your first lift.',
           textAlign: TextAlign.center,
-          style: TextStyle(fontSize: 16, color: Colors.white54),
+          style: TextStyle(fontSize: 16, color: _w54),
         ),
       );
     }
@@ -2122,7 +2236,7 @@ class _HomeScreenState extends State<HomeScreen>
                     fontSize: 18, fontWeight: FontWeight.w600)),
             subtitle: Text(_subtitle(lift),
                 style:
-                    const TextStyle(fontSize: 13, color: Colors.white60)),
+                    TextStyle(fontSize: 13, color: _w60)),
             trailing: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -2200,18 +2314,27 @@ class _HomeScreenState extends State<HomeScreen>
       }
     }
     items.sort((a, b) => b.date.compareTo(a.date));
-    final recent = items.take(15).toList();
+    final recent = items.take(4).toList();
 
     if (recent.isEmpty) {
-      return const Padding(
-        padding: EdgeInsets.only(top: 4, bottom: 8),
-        child: Text('No recent activity from others yet.',
-            style: TextStyle(color: Colors.white54, fontSize: 13)),
+      return Card(
+        margin: EdgeInsets.zero,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Text('No recent activity from others yet.',
+              style: TextStyle(color: _w54, fontSize: 13)),
+        ),
       );
     }
 
-    return Column(
-      children: recent.map((item) {
+    return Card(
+      margin: EdgeInsets.zero,
+      clipBehavior: Clip.hardEdge,
+      child: SizedBox(
+        height: 260,
+        child: ListView(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          children: recent.map((item) {
         final photoData = item.profile.photoData;
         String description;
         VoidCallback onTap;
@@ -2286,30 +2409,32 @@ class _HomeScreenState extends State<HomeScreen>
                         text: TextSpan(children: [
                           TextSpan(
                               text: item.profile.name,
-                              style: const TextStyle(
+                              style: TextStyle(
                                   fontWeight: FontWeight.bold,
-                                  color: Colors.white,
+                                  color: _wt,
                                   fontSize: 13)),
                           TextSpan(
                               text: ' $description',
-                              style: const TextStyle(
-                                  color: Colors.white70, fontSize: 13)),
+                              style: TextStyle(
+                                  color: _w70, fontSize: 13)),
                         ]),
                       ),
                       const SizedBox(height: 2),
                       Text(_timeAgo(item.date),
-                          style: const TextStyle(
-                              fontSize: 11, color: Colors.white38)),
+                          style: TextStyle(
+                              fontSize: 11, color: _w38)),
                     ],
                   ),
                 ),
-                const Icon(Icons.chevron_right,
-                    size: 16, color: Colors.white38),
+                Icon(Icons.chevron_right,
+                    size: 16, color: _w38),
               ],
             ),
           ),
         );
       }).toList(),
+        ),
+      ),
     );
   }
 
@@ -2334,9 +2459,9 @@ class _HomeScreenState extends State<HomeScreen>
             .toList();
 
         if (profiles.isEmpty) {
-          return const Center(
+          return Center(
             child: Text('No other profiles yet.',
-                style: TextStyle(color: Colors.white54)),
+                style: TextStyle(color: _w54)),
           );
         }
 
@@ -2373,7 +2498,7 @@ class _HomeScreenState extends State<HomeScreen>
                 subtitle: Text(
                   '${p.lifts.length} lift${p.lifts.length == 1 ? '' : 's'} · ${p.workouts.length} workout${p.workouts.length == 1 ? '' : 's'}',
                   style:
-                      const TextStyle(fontSize: 12, color: Colors.white54),
+                      TextStyle(fontSize: 12, color: _w54),
                 ),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () => Navigator.push(
@@ -2457,15 +2582,19 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
   }
 
   void _addOrEditRecord({RepRecord? existing, int? existingIndex}) {
+    final cat = widget.lift.category;
+    final isBodyweight = cat == 'bodyweight' || cat == 'gymnastics';
+    final isCardio = cat == 'cardio';
+
     int selectedReps = existing?.reps ?? 1;
-    final weightController = TextEditingController(
-      text: existing != null
+    final valueController = TextEditingController(
+      text: existing != null && existing.weight > 0
           ? (existing.weight % 1 == 0
               ? existing.weight.toInt().toString()
               : existing.weight.toStringAsFixed(1))
           : '',
     );
-    String unit = existing?.unit ?? 'lbs';
+    String unit = existing?.unit ?? (isCardio ? 'sec' : isBodyweight ? 'bw' : 'lbs');
     DateTime selectedDate = existing?.date ?? _selectedDate;
 
     showModalBottomSheet(
@@ -2484,8 +2613,7 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
             children: [
               Text(
                 existing != null ? 'Edit Record' : 'Log New Record',
-                style:
-                    const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 12),
@@ -2503,79 +2631,111 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
                 },
               ),
               const SizedBox(height: 16),
-              const Text('Reps',
-                  style: TextStyle(color: Colors.white60, fontSize: 13)),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: repOptions.map((r) {
-                  final selected = r == selectedReps;
-                  return GestureDetector(
-                    onTap: () => setModalState(() => selectedReps = r),
-                    child: Container(
-                      width: 52,
-                      height: 44,
-                      decoration: BoxDecoration(
-                        color: selected
-                            ? Theme.of(context).colorScheme.primary
-                            : Colors.white12,
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      alignment: Alignment.center,
-                      child: Text(
-                        '${r}RM',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w600,
-                          color: selected ? Colors.white : Colors.white70,
+
+              if (isCardio) ...[
+                // Cardio: value + sec/cal toggle
+                Text('Metric', style: TextStyle(color: _w60, fontSize: 13)),
+                const SizedBox(height: 8),
+                SegmentedButton<String>(
+                  segments: const [
+                    ButtonSegment(value: 'sec', label: Text('Time (sec)')),
+                    ButtonSegment(value: 'cal', label: Text('Calories')),
+                  ],
+                  selected: {unit},
+                  onSelectionChanged: (s) => setModalState(() => unit = s.first),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: valueController,
+                  autofocus: true,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  decoration: InputDecoration(
+                    labelText: unit == 'sec' ? 'Time (seconds)' : 'Calories',
+                    border: const OutlineInputBorder(),
+                    suffixText: unit,
+                  ),
+                ),
+              ] else ...[
+                // Reps picker (barbell + bodyweight/gymnastics)
+                Text('Reps', style: TextStyle(color: _w60, fontSize: 13)),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: repOptions.map((r) {
+                    final selected = r == selectedReps;
+                    return GestureDetector(
+                      onTap: () => setModalState(() => selectedReps = r),
+                      child: Container(
+                        width: 52,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          color: selected
+                              ? Theme.of(context).colorScheme.primary
+                              : Colors.white12,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        alignment: Alignment.center,
+                        child: Text(
+                          '${r}RM',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: selected ? Colors.white : _w70,
+                          ),
                         ),
                       ),
-                    ),
-                  );
-                }).toList(),
-              ),
-              const SizedBox(height: 20),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: weightController,
-                      autofocus: existing == null,
-                      keyboardType: const TextInputType.numberWithOptions(
-                          decimal: true),
-                      decoration: const InputDecoration(
-                        labelText: 'Weight',
-                        border: OutlineInputBorder(),
+                    );
+                  }).toList(),
+                ),
+                if (!isBodyweight) ...[
+                  // Barbell: weight field
+                  const SizedBox(height: 20),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: valueController,
+                          autofocus: existing == null,
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          decoration: const InputDecoration(
+                            labelText: 'Weight',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
                       ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  SegmentedButton<String>(
-                    segments: const [
-                      ButtonSegment(value: 'lbs', label: Text('lbs')),
-                      ButtonSegment(value: 'kg', label: Text('kg')),
+                      const SizedBox(width: 12),
+                      SegmentedButton<String>(
+                        segments: const [
+                          ButtonSegment(value: 'lbs', label: Text('lbs')),
+                          ButtonSegment(value: 'kg', label: Text('kg')),
+                        ],
+                        selected: {unit},
+                        onSelectionChanged: (s) => setModalState(() => unit = s.first),
+                      ),
                     ],
-                    selected: {unit},
-                    onSelectionChanged: (s) =>
-                        setModalState(() => unit = s.first),
                   ),
                 ],
-              ),
+              ],
+
               const SizedBox(height: 24),
               FilledButton(
                 onPressed: () {
-                  final w = double.tryParse(weightController.text.trim());
-                  if (w == null || w <= 0) return;
+                  RepRecord record;
+                  if (isCardio) {
+                    final v = double.tryParse(valueController.text.trim());
+                    if (v == null || v <= 0) return;
+                    record = RepRecord(reps: 0, weight: v, unit: unit, date: selectedDate);
+                  } else if (isBodyweight) {
+                    record = RepRecord(reps: selectedReps, weight: 0, unit: 'bw', date: selectedDate);
+                  } else {
+                    final w = double.tryParse(valueController.text.trim());
+                    if (w == null || w <= 0) return;
+                    record = RepRecord(reps: selectedReps, weight: w, unit: unit, date: selectedDate);
+                  }
                   Navigator.pop(ctx);
                   setState(() {
                     _selectedDate = selectedDate;
-                    final record = RepRecord(
-                      reps: selectedReps,
-                      weight: w,
-                      unit: unit,
-                      date: selectedDate,
-                    );
                     if (existingIndex != null) {
                       widget.lift.history[existingIndex] = record;
                     } else {
@@ -2602,7 +2762,60 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
     widget.onChanged();
   }
 
-  Widget _buildOneRMCard() {
+  Widget _buildBestCard() {
+    final cat = widget.lift.category;
+    final isBodyweight = cat == 'bodyweight' || cat == 'gymnastics';
+    final isCardio = cat == 'cardio';
+
+    if (isBodyweight) {
+      if (widget.lift.history.isEmpty) return const SizedBox.shrink();
+      final maxReps = widget.lift.history.map((r) => r.reps).reduce(max);
+      final best = widget.lift.history.firstWhere((r) => r.reps == maxReps);
+      return Card(
+        margin: const EdgeInsets.only(bottom: 12),
+        color: Theme.of(context).colorScheme.primaryContainer,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+          child: Row(children: [
+            const Icon(Icons.emoji_events, size: 32, color: Colors.amber),
+            const SizedBox(width: 12),
+            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Best', style: TextStyle(fontSize: 13, color: _w70)),
+              Text('$maxReps reps',
+                  style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
+            ]),
+            const Spacer(),
+            Text(_formatDate(best.date), style: TextStyle(fontSize: 12, color: _w60)),
+          ]),
+        ),
+      );
+    }
+
+    if (isCardio) {
+      final best = widget.lift.bests[0];
+      if (best == null) return const SizedBox.shrink();
+      final v = best.weight % 1 == 0 ? best.weight.toInt().toString() : best.weight.toStringAsFixed(1);
+      return Card(
+        margin: const EdgeInsets.only(bottom: 12),
+        color: Theme.of(context).colorScheme.primaryContainer,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+          child: Row(children: [
+            const Icon(Icons.emoji_events, size: 32, color: Colors.amber),
+            const SizedBox(width: 12),
+            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Best', style: TextStyle(fontSize: 13, color: _w70)),
+              Text('$v ${best.unit}',
+                  style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
+            ]),
+            const Spacer(),
+            Text(_formatDate(best.date), style: TextStyle(fontSize: 12, color: _w60)),
+          ]),
+        ),
+      );
+    }
+
+    // Barbell: show 1RM
     final oneRM = widget.lift.bests[1];
     if (oneRM == null) return const SizedBox.shrink();
     final w = oneRM.weight % 1 == 0
@@ -2620,8 +2833,8 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('Most Recent 1RM',
-                    style: TextStyle(fontSize: 13, color: Colors.white70)),
+                Text('Most Recent 1RM',
+                    style: TextStyle(fontSize: 13, color: _w70)),
                 Text('$w ${oneRM.unit}',
                     style: const TextStyle(
                         fontSize: 28, fontWeight: FontWeight.bold)),
@@ -2629,7 +2842,7 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
             ),
             const Spacer(),
             Text(_formatDate(oneRM.date),
-                style: const TextStyle(fontSize: 12, color: Colors.white60)),
+                style: TextStyle(fontSize: 12, color: _w60)),
           ],
         ),
       ),
@@ -2638,19 +2851,28 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
 
   Widget _buildChart() {
     if (widget.lift.history.isEmpty) return const SizedBox.shrink();
+    final cat = widget.lift.category;
+    final isBodyweight = cat == 'bodyweight' || cat == 'gymnastics';
+    final isCardio = cat == 'cardio';
 
     // Build spots from all records sorted by date
     final records = [...widget.lift.history]
       ..sort((a, b) => a.date.compareTo(b.date));
 
+    // y-axis value: reps for bodyweight, weight/value for others
     final spots = records.map((r) {
       final daysSinceEpoch = r.date.millisecondsSinceEpoch / 86400000.0;
-      return FlSpot(daysSinceEpoch, r.weight);
+      return FlSpot(daysSinceEpoch, isBodyweight ? r.reps.toDouble() : r.weight);
     }).toList();
 
-    final minY = records.map((r) => r.weight).reduce(min);
-    final maxY = records.map((r) => r.weight).reduce(max);
+    final yVals = isBodyweight
+        ? records.map((r) => r.reps.toDouble()).toList()
+        : records.map((r) => r.weight).toList();
+    if (yVals.every((v) => v == 0)) return const SizedBox.shrink();
+    final minY = yVals.reduce(min);
+    final maxY = yVals.reduce(max);
     final yPadding = max((maxY - minY) * 0.15, 10.0);
+    final chartLabel = isBodyweight ? 'Reps Progress' : isCardio ? 'Performance Progress' : 'Weight Progress';
 
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
@@ -2659,11 +2881,11 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Padding(
+            Padding(
               padding: EdgeInsets.only(left: 12, bottom: 12),
-              child: Text('Weight Progress',
+              child: Text(chartLabel,
                   style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600,
-                      color: Colors.white70)),
+                      color: _w70)),
             ),
             SizedBox(
               height: 200,
@@ -2687,8 +2909,8 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
                         reservedSize: 44,
                         getTitlesWidget: (value, meta) => Text(
                           value.toInt().toString(),
-                          style: const TextStyle(
-                              fontSize: 11, color: Colors.white54),
+                          style: TextStyle(
+                              fontSize: 11, color: _w54),
                         ),
                       ),
                     ),
@@ -2711,8 +2933,8 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
                             padding: const EdgeInsets.only(top: 4),
                             child: Text(
                               '${months[date.month - 1]} ${date.day}',
-                              style: const TextStyle(
-                                  fontSize: 10, color: Colors.white54),
+                              style: TextStyle(
+                                  fontSize: 10, color: _w54),
                             ),
                           );
                         },
@@ -2760,14 +2982,18 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
                                 r.date.month == date.month &&
                                 r.date.year == date.year,
                             orElse: () => records[s.spotIndex]);
-                        final w = rec.weight % 1 == 0
-                            ? rec.weight.toInt().toString()
-                            : rec.weight.toStringAsFixed(1);
+                        String valStr;
+                        if (isBodyweight) {
+                          valStr = '${rec.reps} reps';
+                        } else {
+                          final w = rec.weight % 1 == 0 ? rec.weight.toInt().toString() : rec.weight.toStringAsFixed(1);
+                          valStr = isCardio ? '$w ${rec.unit}' : '$w ${rec.unit} · ${rec.reps}RM';
+                        }
                         return LineTooltipItem(
-                          '$w ${rec.unit}\n${rec.reps}RM\n${_formatDate(date)}',
-                          const TextStyle(
+                          '$valStr\n${_formatDate(date)}',
+                          TextStyle(
                               fontSize: 12,
-                              color: Colors.white,
+                              color: _wt,
                               fontWeight: FontWeight.w500),
                         );
                       }).toList(),
@@ -2819,25 +3045,47 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
             child: ListView(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
               children: [
-                _buildOneRMCard(),
+                _buildBestCard(),
                 _buildChart(),
                 if (sorted.isEmpty)
-                  const Padding(
+                  Padding(
                     padding: EdgeInsets.symmetric(vertical: 32),
                     child: Text(
                       'No records yet.\nTap + to log a lift.',
                       textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 16, color: Colors.white54),
+                      style: TextStyle(fontSize: 16, color: _w54),
                     ),
                   )
                 else
                   ...sorted.map((entry) {
                     final historyIndex = entry.key;
                     final rec = entry.value;
-                    final isBest = widget.lift.bests[rec.reps] == rec;
-                    final w = rec.weight % 1 == 0
-                        ? rec.weight.toInt().toString()
-                        : rec.weight.toStringAsFixed(1);
+                    final cat = widget.lift.category;
+                    final isBodyweight = cat == 'bodyweight' || cat == 'gymnastics';
+                    final isCardio = cat == 'cardio';
+                    final isBest = widget.lift.bests[isCardio ? 0 : rec.reps] == rec;
+
+                    // Leading badge text
+                    final String badgeText;
+                    if (isBodyweight) {
+                      badgeText = '${rec.reps}\nreps';
+                    } else if (isCardio) {
+                      badgeText = rec.unit;
+                    } else {
+                      badgeText = '${rec.reps}RM';
+                    }
+
+                    // Main value text
+                    final String valueText;
+                    if (isBodyweight) {
+                      valueText = '${rec.reps} reps';
+                    } else {
+                      final w = rec.weight % 1 == 0
+                          ? rec.weight.toInt().toString()
+                          : rec.weight.toStringAsFixed(1);
+                      valueText = '$w ${rec.unit}';
+                    }
+
                     return Padding(
                       padding: const EdgeInsets.only(bottom: 8),
                       child: Card(
@@ -2856,10 +3104,11 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
                             ),
                             alignment: Alignment.center,
                             child: Text(
-                              '${rec.reps}RM',
+                              badgeText,
+                              textAlign: TextAlign.center,
                               style: TextStyle(
                                 fontWeight: FontWeight.bold,
-                                fontSize: 15,
+                                fontSize: 13,
                                 color: Theme.of(context)
                                     .colorScheme
                                     .onPrimaryContainer,
@@ -2867,7 +3116,7 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
                             ),
                           ),
                           title: Row(children: [
-                            Text('$w ${rec.unit}',
+                            Text(valueText,
                                 style: const TextStyle(
                                     fontSize: 22,
                                     fontWeight: FontWeight.bold)),
@@ -2878,8 +3127,8 @@ class _LiftDetailScreenState extends State<LiftDetailScreen> {
                             ],
                           ]),
                           subtitle: Text(_formatDate(rec.date),
-                              style: const TextStyle(
-                                  fontSize: 12, color: Colors.white54)),
+                              style: TextStyle(
+                                  fontSize: 12, color: _w54)),
                           trailing: widget.isOwnProfile
                               ? Row(
                                   mainAxisSize: MainAxisSize.min,
@@ -3370,13 +3619,13 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
               ),
             // Exercise list
             if (_exercises.isEmpty)
-              const Padding(
+              Padding(
                 padding: EdgeInsets.symmetric(vertical: 48),
                 child: Center(
                   child: Text(
                     'No exercises yet.\nTap + to add exercises.',
                     textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 16, color: Colors.white54),
+                    style: TextStyle(fontSize: 16, color: _w54),
                   ),
                 ),
               )
@@ -3483,7 +3732,7 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
   Widget _buildFunctionalCard(WorkoutExercise ex, int i) {
     final name = ex.liftName;
     final selIdx = (_otherSelIdx[name] ?? 0).clamp(0, _otherOptions.length - 1);
-    const labelStyle = TextStyle(fontSize: 12, color: Colors.white54);
+    final labelStyle = TextStyle(fontSize: 12, color: _w54);
     return Card(
       margin: EdgeInsets.zero,
       child: Padding(
@@ -3510,10 +3759,10 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
             Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                const SizedBox(
+                SizedBox(
                     width: 72, child: Text('Reps', style: labelStyle)),
                 const SizedBox(width: 10),
-                const Expanded(child: Text('Weight', style: labelStyle)),
+                Expanded(child: Text('Weight', style: labelStyle)),
                 const SizedBox(width: 8),
                 // "Other" header with dropdown
                 SizedBox(
@@ -3527,8 +3776,8 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
                         (idx) => DropdownMenuItem(
                           value: idx,
                           child: Text(_otherOptions[idx],
-                              style: const TextStyle(
-                                  fontSize: 12, color: Colors.white70)),
+                              style: TextStyle(
+                                  fontSize: 12, color: _w70)),
                         ),
                       ),
                       onChanged: (v) {
@@ -3571,8 +3820,8 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
                       contentPadding: const EdgeInsets.symmetric(
                           horizontal: 8, vertical: 10),
                       suffixText: _unitSel[name] ?? 'lbs',
-                      suffixStyle: const TextStyle(
-                          fontSize: 11, color: Colors.white38),
+                      suffixStyle: TextStyle(
+                          fontSize: 11, color: _w38),
                     ),
                   ),
                 ),
@@ -3596,7 +3845,7 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
                         child: Text(u,
                             style: TextStyle(
                                 fontSize: 11,
-                                color: sel ? Colors.black : Colors.white38)),
+                                color: sel ? Colors.black : _w38)),
                       ),
                     );
                   }).toList(),
@@ -3633,7 +3882,7 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
     final oneRM = isPercent ? _oneRM(name) : null;
     final otherIdx = (_otherSelIdx[name] ?? 0).clamp(0, _otherOptions.length - 1);
     final isConfirmed = _confirmed.contains(name);
-    const labelStyle = TextStyle(fontSize: 11, color: Colors.white54);
+    final labelStyle = TextStyle(fontSize: 11, color: _w54);
 
     return Card(
       margin: EdgeInsets.zero,
@@ -3650,7 +3899,7 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
               ),
               GestureDetector(
                 onTap: () => _removeExercise(i),
-                child: const Icon(Icons.close, size: 20, color: Colors.white54),
+                child: Icon(Icons.close, size: 20, color: _w54),
               ),
             ]),
             const SizedBox(height: 12),
@@ -3659,14 +3908,14 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
               // ── CONFIG PHASE ──────────────────────────────────────────────
               // Column labels
               Row(children: [
-                const SizedBox(width: 54, child: Text('Sets', style: labelStyle)),
+                SizedBox(width: 54, child: Text('Sets', style: labelStyle)),
                 const SizedBox(width: 10),
-                const SizedBox(width: 54, child: Text('Reps', style: labelStyle)),
+                SizedBox(width: 54, child: Text('Reps', style: labelStyle)),
                 const SizedBox(width: 10),
                 // Weight label + unit dropdown inline
                 Expanded(
                   child: Row(children: [
-                    const Text('Weight', style: labelStyle),
+                    Text('Weight', style: labelStyle),
                     const SizedBox(width: 6),
                     DropdownButtonHideUnderline(
                       child: DropdownButton<String>(
@@ -3674,7 +3923,7 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
                         isDense: true,
                         items: ['lbs', 'kg', '%'].map((u) => DropdownMenuItem(
                           value: u,
-                          child: Text(u, style: const TextStyle(fontSize: 11, color: Colors.white70)),
+                          child: Text(u, style: TextStyle(fontSize: 11, color: _w70)),
                         )).toList(),
                         onChanged: (v) { if (v != null) setState(() => _unitSel[name] = v); },
                       ),
@@ -3692,7 +3941,7 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
                       items: List.generate(_otherOptions.length, (idx) => DropdownMenuItem(
                         value: idx,
                         child: Text(_otherOptions[idx],
-                            style: const TextStyle(fontSize: 11, color: Colors.white70)),
+                            style: TextStyle(fontSize: 11, color: _w70)),
                       )),
                       onChanged: (v) { if (v != null) setState(() => _otherSelIdx[name] = v); },
                     ),
@@ -3737,12 +3986,12 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
                       isDense: true, border: const OutlineInputBorder(),
                       contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
                       suffixText: isPercent ? '%' : null,
-                      suffixStyle: const TextStyle(fontSize: 10, color: Colors.white38),
+                      suffixStyle: TextStyle(fontSize: 10, color: _w38),
                       helperText: isPercent && oneRM != null &&
                               double.tryParse(_weightCtrl[name]?.text.trim() ?? '') != null
                           ? '= ${(double.parse(_weightCtrl[name]!.text.trim()) / 100 * oneRM).toStringAsFixed(1)} lbs'
                           : null,
-                      helperStyle: const TextStyle(fontSize: 10, color: Colors.white38),
+                      helperStyle: TextStyle(fontSize: 10, color: _w38),
                     ),
                     onChanged: (_) => setState(() {}),
                   ),
@@ -3772,16 +4021,16 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
               // ── CONFIRMED PHASE ───────────────────────────────────────────
               // Column headers
               Row(children: [
-                const SizedBox(width: 28, child: Text('Set', style: labelStyle)),
+                SizedBox(width: 28, child: Text('Set', style: labelStyle)),
                 const SizedBox(width: 8),
-                const SizedBox(width: 54, child: Text('Reps', style: labelStyle)),
+                SizedBox(width: 54, child: Text('Reps', style: labelStyle)),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Row(children: [
-                    const Text('Weight', style: labelStyle),
+                    Text('Weight', style: labelStyle),
                     const SizedBox(width: 4),
                     Text(isPercent ? '%' : unit,
-                        style: const TextStyle(fontSize: 10, color: Colors.white38)),
+                        style: TextStyle(fontSize: 10, color: _w38)),
                   ]),
                 ),
                 const SizedBox(width: 8),
@@ -3835,10 +4084,10 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
                             isDense: true, border: const OutlineInputBorder(),
                             contentPadding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
                             suffixText: isPercent ? '%' : unit,
-                            suffixStyle: const TextStyle(fontSize: 10, color: Colors.white38),
+                            suffixStyle: TextStyle(fontSize: 10, color: _w38),
                             helperText: calcWeight != null
                                 ? '${calcWeight.toStringAsFixed(1)} lbs' : null,
-                            helperStyle: const TextStyle(fontSize: 10, color: Colors.white38),
+                            helperStyle: TextStyle(fontSize: 10, color: _w38),
                           ),
                         ),
                       ),
@@ -3869,7 +4118,7 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
                             borderRadius: BorderRadius.circular(6),
                           ),
                           child: Icon(Icons.close, size: 16,
-                              color: row.status == SetStatus.missed ? Colors.white : Colors.white38),
+                              color: row.status == SetStatus.missed ? Colors.white : _w38),
                         ),
                       ),
                       const SizedBox(width: 4),
@@ -3886,7 +4135,7 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
                             borderRadius: BorderRadius.circular(6),
                           ),
                           child: Icon(Icons.check, size: 16,
-                              color: row.status == SetStatus.succeeded ? Colors.white : Colors.white38),
+                              color: row.status == SetStatus.succeeded ? Colors.white : _w38),
                         ),
                       ),
                     ],
@@ -4108,7 +4357,7 @@ class _ProgramTabViewState extends State<_ProgramTabView> {
                     Text(_dayLabels[i],
                         style: TextStyle(
                           fontSize: 11,
-                          color: isSelected ? primary : Colors.white54,
+                          color: isSelected ? primary : _w54,
                           fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
                         )),
                     const SizedBox(height: 4),
@@ -4123,7 +4372,7 @@ class _ProgramTabViewState extends State<_ProgramTabView> {
                             style: TextStyle(
                               fontWeight: FontWeight.w600,
                               fontSize: 14,
-                              color: isSelected ? Colors.white : Colors.white70,
+                              color: isSelected ? Colors.white : _w70,
                             )),
                       ),
                     ),
@@ -4158,11 +4407,11 @@ class _ProgramTabViewState extends State<_ProgramTabView> {
               ),
               // Programmed exercises — shown as a single card
               if (dayData == null || exercises.isEmpty)
-                const SliverToBoxAdapter(
+                SliverToBoxAdapter(
                   child: Padding(
-                    padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                     child: Text('No program for this day.',
-                        style: TextStyle(color: Colors.white54, fontSize: 13)),
+                        style: TextStyle(color: _w54, fontSize: 13)),
                   ),
                 )
               else
@@ -4235,7 +4484,7 @@ class _ProgramTabViewState extends State<_ProgramTabView> {
                                     ),
                                   ],
                                   const Spacer(),
-                                  const Icon(Icons.chevron_right, color: Colors.white38),
+                                  Icon(Icons.chevron_right, color: _w38),
                                 ]),
                                 const SizedBox(height: 10),
                                 ...[
@@ -4248,10 +4497,10 @@ class _ProgramTabViewState extends State<_ProgramTabView> {
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
                                       Text(b.$1,
-                                          style: const TextStyle(
+                                          style: TextStyle(
                                               fontSize: 12,
                                               fontWeight: FontWeight.w600,
-                                              color: Colors.white54)),
+                                              color: _w54)),
                                       const SizedBox(height: 3),
                                       Wrap(
                                         spacing: 6,
@@ -4311,11 +4560,11 @@ class _ProgramTabViewState extends State<_ProgramTabView> {
               ),
               // Workouts list (planned + completed)
               if (_sortedWorkouts.isEmpty)
-                const SliverToBoxAdapter(
+                SliverToBoxAdapter(
                   child: Padding(
-                    padding: EdgeInsets.fromLTRB(16, 0, 16, 16),
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                     child: Text('No workouts logged yet.',
-                        style: TextStyle(color: Colors.white54, fontSize: 13)),
+                        style: TextStyle(color: _w54, fontSize: 13)),
                   ),
                 )
               else
@@ -4360,13 +4609,17 @@ class _ProgramTabViewState extends State<_ProgramTabView> {
                                   Icon(Icons.pending_outlined, size: 14,
                                       color: Theme.of(context).colorScheme.primary),
                                   const SizedBox(width: 6),
+                                ] else if (workout.completed) ...[
+                                  Icon(Icons.check_circle, size: 14,
+                                      color: Colors.green.shade400),
+                                  const SizedBox(width: 6),
                                 ],
                                 Expanded(
                                   child: Text(_fmtDate(workout.date),
                                       style: TextStyle(
                                           fontWeight: FontWeight.w600,
                                           fontSize: 15,
-                                          color: isPlanned ? Colors.white70 : Colors.white)),
+                                          color: isPlanned ? _w70 : Colors.white)),
                                 ),
                                 Container(
                                   padding: const EdgeInsets.symmetric(
@@ -4396,13 +4649,13 @@ class _ProgramTabViewState extends State<_ProgramTabView> {
                                   exNames.isEmpty ? 'No exercises' : exNames,
                                   style: TextStyle(
                                       fontSize: 12,
-                                      color: isPlanned ? Colors.white38 : Colors.white60),
+                                      color: isPlanned ? _w38 : _w60),
                                   overflow: TextOverflow.ellipsis),
                               trailing: Icon(
                                 isPlanned ? Icons.play_circle_outline : Icons.chevron_right,
                                 color: isPlanned
                                     ? Theme.of(context).colorScheme.primary
-                                    : Colors.white54,
+                                    : _w54,
                               ),
                               onTap: () => Navigator.push(
                                 context,
@@ -4507,6 +4760,8 @@ class _ProgGroup {
   final Map<ProgramExercise, TextEditingController> pctCtrl = {};
   // Per-set percent controllers (emomStrength single-exercise)
   final Map<ProgramExercise, List<TextEditingController>> perSetPctCtrl = {};
+  // Per-set status (emomStrength single-exercise)
+  final Map<ProgramExercise, List<SetStatus>> perSetStatus = {};
 
   _ProgGroup({
     required this.type,
@@ -4549,17 +4804,20 @@ class _ProgGroup {
     final wList = perSetWeightCtrl.putIfAbsent(ex, () => []);
     final eList = perSetRpeCtrl.putIfAbsent(ex, () => []);
     final pList = perSetPctCtrl.putIfAbsent(ex, () => []);
+    final sList = perSetStatus.putIfAbsent(ex, () => []);
     while (rList.length < count) {
       rList.add(TextEditingController(text: repsCtrl[ex]?.text ?? '10'));
       wList.add(TextEditingController(text: weightCtrl[ex]?.text ?? ''));
       eList.add(TextEditingController());
       pList.add(TextEditingController());
+      sList.add(SetStatus.none);
     }
     while (rList.length > count) {
       rList.removeLast().dispose();
       wList.removeLast().dispose();
       eList.removeLast().dispose();
       pList.removeLast().dispose();
+      sList.removeLast();
     }
   }
 
@@ -4847,9 +5105,11 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
     final selected = await _showExercisePicker(exclude: {});
     if (selected.isEmpty || !mounted) return;
 
-    // Show config dialog (min/sets for EMOM/EMOM Strength, time cap for AMRAP)
+    // Show config dialog (min/sets for EMOM/EMOM Strength, time cap for AMRAP, rounds for For Rounds, minutes for For Time)
     final isEmomType = type == 'emom' || type == 'emomStrength';
-    final configCtrl1 = TextEditingController(text: isEmomType ? '1' : '20');
+    final isForRounds = type == 'forRounds';
+    final isForTime = type == 'forTime';
+    final configCtrl1 = TextEditingController(text: isEmomType ? '1' : isForRounds ? '3' : isForTime ? '20' : '20');
     final configCtrlSec = TextEditingController(text: '0');
     final configCtrl2 = TextEditingController(text: '6');
     bool confirmed = false;
@@ -4857,7 +5117,7 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
     await showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(isEmomType ? 'EMOM Config' : 'AMRAP Config'),
+        title: Text(isEmomType ? 'EMOM Config' : isForRounds ? 'For Rounds Config' : isForTime ? 'For Time Config' : 'AMRAP Config'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -4931,14 +5191,34 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text('Preview (E${intervalLabel}MOM)',
-                          style: const TextStyle(fontSize: 11, color: Colors.white54)),
+                          style: TextStyle(fontSize: 11, color: _w54)),
                       const SizedBox(height: 4),
                       ...lines.map((l) => Text(l,
-                          style: const TextStyle(fontSize: 12, color: Colors.white70))),
+                          style: TextStyle(fontSize: 12, color: _w70))),
                     ],
                   ),
                 );
               }),
+            ] else if (isForRounds) ...[
+              TextField(
+                controller: configCtrl1,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Rounds',
+                  border: OutlineInputBorder(),
+                  suffixText: 'rounds',
+                ),
+              ),
+            ] else if (isForTime) ...[
+              TextField(
+                controller: configCtrl1,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Time Cap',
+                  border: OutlineInputBorder(),
+                  suffixText: 'min',
+                ),
+              ),
             ] else ...[
               TextField(
                 controller: configCtrl1,
@@ -5013,6 +5293,18 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
               subtitle: const Text('As Many Rounds As Possible'),
               onTap: () { Navigator.pop(context); _addGroupWorkout('amrap', blockKey, section); },
             ),
+            ListTile(
+              leading: const Icon(Icons.repeat),
+              title: const Text('For Rounds'),
+              subtitle: const Text('Fixed number of rounds'),
+              onTap: () { Navigator.pop(context); _addGroupWorkout('forRounds', blockKey, section); },
+            ),
+            ListTile(
+              leading: const Icon(Icons.timer_outlined),
+              title: const Text('For Time'),
+              subtitle: const Text('Complete for time (minute cap)'),
+              onTap: () { Navigator.pop(context); _addGroupWorkout('forTime', blockKey, section); },
+            ),
           ],
         ),
       ),
@@ -5021,20 +5313,71 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
 
   // ── Card builders ─────────────────────────────────────────────────────────
 
-  Widget _statusBtn(ProgramExercise ex, int idx, SetStatus target, IconData icon, Color activeColor) {
-    final row = _rowCtrl[ex]![idx];
-    final active = row.status == target;
-    return GestureDetector(
-      onTap: () => setState(() { row.status = active ? SetStatus.none : target; }),
-      child: Container(
-        width: 32, height: 32,
-        decoration: BoxDecoration(
-          color: active ? activeColor : Colors.white10,
-          borderRadius: BorderRadius.circular(6),
-        ),
-        child: Icon(icon, size: 16, color: active ? Colors.white : Colors.white38),
-      ),
+  Widget _groupStatusBtnPair(_ProgGroup group, ProgramExercise ex, int idx) {
+    final locked = ex.completed;
+    final sList = group.perSetStatus.putIfAbsent(ex, () => List.filled(group.perSetRepsCtrl[ex]?.length ?? 0, SetStatus.none));
+    while (sList.length <= idx) { sList.add(SetStatus.none); }
+    final status = sList[idx];
+    return _buildStatusPair(
+      locked: locked,
+      status: status,
+      onMissed: () => setState(() { sList[idx] = status == SetStatus.missed ? SetStatus.none : SetStatus.missed; }),
+      onSucceeded: () => setState(() { sList[idx] = status == SetStatus.succeeded ? SetStatus.none : SetStatus.succeeded; }),
     );
+  }
+
+  Widget _statusBtnPair(ProgramExercise ex, int idx) {
+    final locked = ex.completed;
+    final row = _rowCtrl[ex]![idx];
+    final status = row.status;
+    return _buildStatusPair(
+      locked: locked,
+      status: status,
+      onMissed: () => setState(() { row.status = status == SetStatus.missed ? SetStatus.none : SetStatus.missed; }),
+      onSucceeded: () => setState(() { row.status = status == SetStatus.succeeded ? SetStatus.none : SetStatus.succeeded; }),
+    );
+  }
+
+  Widget _buildStatusPair({
+    required bool locked,
+    required SetStatus status,
+    required VoidCallback onMissed,
+    required VoidCallback onSucceeded,
+  }) {
+    Widget btn(IconData icon, Color activeColor, bool active, VoidCallback onTap) =>
+        GestureDetector(
+          onTap: locked ? null : onTap,
+          child: Container(
+            width: 32, height: 32,
+            decoration: BoxDecoration(
+              color: active ? activeColor : Colors.white10,
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Icon(icon, size: 16, color: active ? Colors.white : _w38),
+          ),
+        );
+
+    if (locked) {
+      if (status == SetStatus.missed) {
+        return Row(mainAxisSize: MainAxisSize.min, children: [
+          btn(Icons.close, Colors.red, true, onMissed),
+          const SizedBox(width: 36),
+        ]);
+      }
+      if (status == SetStatus.succeeded) {
+        return Row(mainAxisSize: MainAxisSize.min, children: [
+          const SizedBox(width: 36),
+          btn(Icons.check, Colors.green, true, onSucceeded),
+        ]);
+      }
+      return const SizedBox(width: 68);
+    }
+
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      btn(Icons.close, Colors.red, status == SetStatus.missed, onMissed),
+      const SizedBox(width: 4),
+      btn(Icons.check, Colors.green, status == SetStatus.succeeded, onSucceeded),
+    ]);
   }
 
   Widget _buildExerciseCard(ProgramExercise ex, List<_SectionItem> section, int itemIdx) {
@@ -5051,7 +5394,7 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
             Row(children: [
               ReorderableDragStartListener(
                 index: itemIdx,
-                child: const Icon(Icons.drag_handle, color: Colors.white38, size: 22),
+                child: Icon(Icons.drag_handle, color: _w38, size: 22),
               ),
               const SizedBox(width: 8),
               Expanded(child: Text(ex.name,
@@ -5071,18 +5414,18 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
               const SizedBox(width: 8),
               GestureDetector(
                 onTap: () => setState(() { section.removeAt(itemIdx); _disposeCtrl(ex); }),
-                child: const Icon(Icons.close, size: 18, color: Colors.white38),
+                child: Icon(Icons.close, size: 18, color: _w38),
               ),
             ]),
             const SizedBox(height: 10),
-            const Row(children: [
-              SizedBox(width: 24, child: Text('Set', style: TextStyle(fontSize: 11, color: Colors.white38))),
+            Row(children: [
+              SizedBox(width: 24, child: Text('Set', style: TextStyle(fontSize: 11, color: _w38))),
               SizedBox(width: 8),
-              SizedBox(width: 56, child: Text('Reps', style: TextStyle(fontSize: 11, color: Colors.white38))),
+              SizedBox(width: 56, child: Text('Reps', style: TextStyle(fontSize: 11, color: _w38))),
               SizedBox(width: 8),
-              Expanded(child: Text('Weight', style: TextStyle(fontSize: 11, color: Colors.white38))),
+              Expanded(child: Text('Weight', style: TextStyle(fontSize: 11, color: _w38))),
               SizedBox(width: 8),
-              SizedBox(width: 48, child: Text('RPE', style: TextStyle(fontSize: 11, color: Colors.white38), textAlign: TextAlign.center)),
+              SizedBox(width: 48, child: Text('RPE', style: TextStyle(fontSize: 11, color: _w38), textAlign: TextAlign.center)),
               SizedBox(width: 76),
             ]),
             const SizedBox(height: 4),
@@ -5133,9 +5476,7 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
                         contentPadding: EdgeInsets.symmetric(vertical: 7, horizontal: 4), hintText: '–'),
                   )),
                   const SizedBox(width: 6),
-                  _statusBtn(ex, rowIdx, SetStatus.missed, Icons.close, Colors.red),
-                  const SizedBox(width: 4),
-                  _statusBtn(ex, rowIdx, SetStatus.succeeded, Icons.check, Colors.green),
+                  _statusBtnPair(ex, rowIdx),
                 ]),
               );
             }),
@@ -5169,7 +5510,7 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
                     TextButton(
                       onPressed: () => setState(() => ex.completed = false),
                       style: TextButton.styleFrom(padding: EdgeInsets.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap),
-                      child: const Text('Undo', style: TextStyle(fontSize: 12, color: Colors.white38)),
+                      child: Text('Undo', style: TextStyle(fontSize: 12, color: _w38)),
                     ),
                   ])
                 : SizedBox(
@@ -5198,7 +5539,9 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
     final totalSets = int.tryParse(group.totalSetsCtrl.text) ?? 6;
     final isSingleExEmom = isEmom && exList.length == 1;
     final workingMax = double.tryParse(group.workingMaxCtrl.text) ?? 0;
-    final typeColor = isEmomStrength ? Colors.deepPurple : (isEmom ? Colors.orange : Colors.teal);
+    final isForRounds = group.type == 'forRounds';
+    final isForTime = group.type == 'forTime';
+    final typeColor = isEmomStrength ? Colors.deepPurple : isEmom ? Colors.orange : isForRounds ? Colors.indigo : isForTime ? Colors.cyan.shade700 : Colors.teal;
     return Card(
       key: ValueKey(group.id),
       margin: const EdgeInsets.only(bottom: 10),
@@ -5215,7 +5558,7 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
             Row(children: [
               ReorderableDragStartListener(
                 index: itemIdx,
-                child: const Icon(Icons.drag_handle, color: Colors.white38, size: 22),
+                child: Icon(Icons.drag_handle, color: _w38, size: 22),
               ),
               const SizedBox(width: 8),
               Container(
@@ -5224,13 +5567,13 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
                   color: typeColor.withValues(alpha: 0.2),
                   borderRadius: BorderRadius.circular(6),
                 ),
-                child: Text(isEmomStrength ? 'EMOM (Strength)' : (isEmom ? 'EMOM' : 'AMRAP'),
+                child: Text(isEmomStrength ? 'EMOM (Strength)' : isEmom ? 'EMOM' : isForRounds ? 'For Rounds' : isForTime ? 'For Time' : 'AMRAP',
                     style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: typeColor)),
               ),
               const Spacer(),
               GestureDetector(
                 onTap: () => setState(() { group.dispose(); section.removeAt(itemIdx); }),
-                child: const Icon(Icons.close, size: 18, color: Colors.white38),
+                child: Icon(Icons.close, size: 18, color: _w38),
               ),
             ]),
             const SizedBox(height: 12),
@@ -5283,6 +5626,24 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
                   ],
                 ],
               )
+            else if (isForRounds)
+              TextField(
+                controller: group.intervalMinCtrl,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Rounds',
+                  border: OutlineInputBorder(), isDense: true, suffixText: 'rounds',
+                ),
+              )
+            else if (isForTime)
+              TextField(
+                controller: group.intervalMinCtrl,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Time Cap',
+                  border: OutlineInputBorder(), isDense: true, suffixText: 'min',
+                ),
+              )
             else
               TextField(
                 controller: group.intervalMinCtrl,
@@ -5317,13 +5678,13 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
                     const SizedBox(height: 10),
                     // Reps/Time mode selector (row-level setting)
                     Row(children: [
-                      const Text('Mode:', style: TextStyle(fontSize: 12, color: Colors.white54)),
+                      Text('Mode:', style: TextStyle(fontSize: 12, color: _w54)),
                       const SizedBox(width: 8),
                       DropdownButton<String>(
                         value: group.repOrTimeMode[ex] ?? 'reps',
                         isDense: true,
                         underline: const SizedBox(),
-                        style: const TextStyle(fontSize: 12, color: Colors.white70),
+                        style: TextStyle(fontSize: 12, color: _w70),
                         dropdownColor: const Color(0xFF1E1E1E),
                         items: const [
                           DropdownMenuItem(value: 'reps', child: Text('Reps')),
@@ -5338,14 +5699,15 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
                       const SizedBox(width: 52),
                       const SizedBox(width: 8),
                       SizedBox(width: 46, child: Text(isTime ? 'Time' : 'Reps',
-                          style: const TextStyle(fontSize: 11, color: Colors.white38), textAlign: TextAlign.center)),
+                          style: TextStyle(fontSize: 11, color: _w38), textAlign: TextAlign.center)),
                       const SizedBox(width: 8),
                       if (isEmomStrength) ...[
-                        const SizedBox(width: 46, child: Text('%', style: TextStyle(fontSize: 11, color: Colors.white38), textAlign: TextAlign.center)),
+                        SizedBox(width: 46, child: Text('%', style: TextStyle(fontSize: 11, color: _w38), textAlign: TextAlign.center)),
                         const SizedBox(width: 8),
                       ],
                       SizedBox(width: 70, child: Text(isTime ? 'RPE' : 'Weight',
-                          style: const TextStyle(fontSize: 11, color: Colors.white38), textAlign: TextAlign.center)),
+                          style: TextStyle(fontSize: 11, color: _w38), textAlign: TextAlign.center)),
+                      const SizedBox(width: 70),
                     ]),
                     const SizedBox(height: 4),
                     // One row per set
@@ -5424,6 +5786,8 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
                             hintText: isTime ? 'RPE' : '–',
                           ),
                         )),
+                        const SizedBox(width: 6),
+                        _groupStatusBtnPair(group, ex, i),
                       ]),
                     )),
                   ],
@@ -5433,20 +5797,20 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
             // ── Multi-exercise: one row per unique exercise ───────────────────
             // Column headers
             Row(children: [
-              SizedBox(width: 28, child: Text('#', style: TextStyle(fontSize: 11, color: Colors.white38))),
+              SizedBox(width: 28, child: Text('#', style: TextStyle(fontSize: 11, color: _w38))),
               const SizedBox(width: 8),
-              const Expanded(child: Text('Exercise', style: TextStyle(fontSize: 11, color: Colors.white38))),
+              Expanded(child: Text('Exercise', style: TextStyle(fontSize: 11, color: _w38))),
               const SizedBox(width: 8),
               if (isEmom)
-                const SizedBox(width: 110, child: Text('Reps / Time', style: TextStyle(fontSize: 11, color: Colors.white38), textAlign: TextAlign.center))
+                SizedBox(width: 110, child: Text('Reps / Time', style: TextStyle(fontSize: 11, color: _w38), textAlign: TextAlign.center))
               else
-                const SizedBox(width: 56, child: Text('Reps', style: TextStyle(fontSize: 11, color: Colors.white38), textAlign: TextAlign.center)),
+                SizedBox(width: 56, child: Text('Reps', style: TextStyle(fontSize: 11, color: _w38), textAlign: TextAlign.center)),
               const SizedBox(width: 8),
               if (isEmomStrength) ...[
-                const SizedBox(width: 46, child: Text('%', style: TextStyle(fontSize: 11, color: Colors.white38), textAlign: TextAlign.center)),
+                SizedBox(width: 46, child: Text('%', style: TextStyle(fontSize: 11, color: _w38), textAlign: TextAlign.center)),
                 const SizedBox(width: 8),
               ],
-              const SizedBox(width: 70, child: Text('Wt / RPE', style: TextStyle(fontSize: 11, color: Colors.white38), textAlign: TextAlign.center)),
+              SizedBox(width: 70, child: Text('Wt / RPE', style: TextStyle(fontSize: 11, color: _w38), textAlign: TextAlign.center)),
               const SizedBox(width: 26),
             ]),
             const SizedBox(height: 4),
@@ -5485,7 +5849,7 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
                             value: group.repOrTimeMode[ex] ?? 'reps',
                             isDense: true,
                             underline: const SizedBox(),
-                            style: const TextStyle(fontSize: 11, color: Colors.white70),
+                            style: TextStyle(fontSize: 11, color: _w70),
                             dropdownColor: const Color(0xFF1E1E1E),
                             items: const [
                               DropdownMenuItem(value: 'reps', child: Text('Rep')),
@@ -5566,7 +5930,7 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
                       });
                     },
                     child: Icon(Icons.close, size: 16,
-                        color: exList.length > 1 ? Colors.white38 : Colors.white12),
+                        color: exList.length > 1 ? _w38 : Colors.white12),
                   ),
                 ]),
               );
@@ -5611,7 +5975,7 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
                       TextButton(
                         onPressed: () => setState(() { for (final e in exList) { e.completed = false; } }),
                         style: TextButton.styleFrom(padding: EdgeInsets.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap),
-                        child: const Text('Undo', style: TextStyle(fontSize: 12, color: Colors.white38)),
+                        child: Text('Undo', style: TextStyle(fontSize: 12, color: _w38)),
                       ),
                     ])
                   : SizedBox(
@@ -5770,9 +6134,11 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
       'emom' => interval == 1 && sec == 0 ? 'EMOM' : 'E${intervalLabel}MOM',
       'emomStrength' => interval == 1 && sec == 0 ? 'EMOM (Strength)' : 'E${intervalLabel}MOM (Strength)',
       'amrap' => 'AMRAP',
+      'forRounds' => 'For Rounds',
+      'forTime' => 'For Time',
       _ => 'Group',
     };
-    final suffix = type == 'amrap' ? '$total min' : '×$total';
+    final suffix = type == 'amrap' ? '$total min' : type == 'forRounds' ? '×$total rounds' : type == 'forTime' ? '${total}min' : '×$total';
     return '$prefix $suffix: $names';
   }
 
@@ -5793,7 +6159,7 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
     return Padding(
       padding: const EdgeInsets.only(left: 26, bottom: 4),
       child: Text(parts.join('  ·  '),
-          style: const TextStyle(fontSize: 12, color: Colors.white54)),
+          style: TextStyle(fontSize: 12, color: _w54)),
     );
   }
 
@@ -5807,8 +6173,8 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
         Padding(
           padding: const EdgeInsets.fromLTRB(0, 16, 0, 4),
           child: Text(title,
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
-                  color: Colors.white54, letterSpacing: 0.8)),
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
+                  color: _w54, letterSpacing: 0.8)),
         ),
         ...items.map((exs) {
           final done = exs.every((e) => e.completed);
@@ -5826,13 +6192,13 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
                     Icon(
                       done ? Icons.check_circle : Icons.radio_button_unchecked,
                       size: 16,
-                      color: done ? Colors.green.shade400 : Colors.white38,
+                      color: done ? Colors.green.shade400 : _w38,
                     ),
                     const SizedBox(width: 10),
                     Expanded(child: Text(label,
                         style: TextStyle(
                             fontSize: 14,
-                            color: done ? Colors.white70 : Colors.white))),
+                            color: done ? _w70 : Colors.white))),
                     const Icon(Icons.chevron_right, size: 16, color: Colors.white24),
                   ]),
                   if (maxRow != null) ...[
@@ -5904,7 +6270,7 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
               ),
             )
           : ListView(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
               children: [
                 _buildOutlineSection('Warm Up', 'warmUp'),
                 _buildOutlineSection('Main', 'main'),
@@ -5920,6 +6286,31 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
                     ),
                   ),
                 ],
+                const SizedBox(height: 24),
+                if (widget.existingDay?.completed == true)
+                  Row(children: [
+                    Icon(Icons.check_circle, color: Colors.green.shade400, size: 20),
+                    const SizedBox(width: 8),
+                    Text('Workout Completed',
+                        style: TextStyle(color: Colors.green.shade400, fontWeight: FontWeight.w600)),
+                  ])
+                else
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      icon: const Icon(Icons.check),
+                      label: const Text('Complete Workout'),
+                      onPressed: () {
+                        for (final ex in _outlineExercises) { ex.completed = true; }
+                        _persistWorkout(_outlineExercises, completed: true);
+                        setState(() {});
+                      },
+                      style: FilledButton.styleFrom(
+                        backgroundColor: Colors.green,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                      ),
+                    ),
+                  ),
               ],
             ),
     );
@@ -5963,6 +6354,8 @@ class _ProgramFlowScreenState extends State<ProgramFlowScreen> {
   final Map<ProgramExercise, List<TextEditingController>> _rpeCtrl = {};
   final Map<ProgramExercise, List<TextEditingController>> _pctCtrl = {};
   final Map<ProgramExercise, TextEditingController> _workingMaxCtrl = {};
+  final Map<ProgramExercise, TextEditingController> _groupIntervalMinCtrl = {};
+  final Map<ProgramExercise, TextEditingController> _groupTotalSetsCtrl = {};
   final Map<ProgramExercise, List<SetStatus>> _statusMap = {};
 
   @override
@@ -5973,6 +6366,8 @@ class _ProgramFlowScreenState extends State<ProgramFlowScreen> {
     for (final list in _rpeCtrl.values) { for (final c in list) { c.dispose(); } }
     for (final list in _pctCtrl.values) { for (final c in list) { c.dispose(); } }
     for (final c in _workingMaxCtrl.values) { c.dispose(); }
+    for (final c in _groupIntervalMinCtrl.values) { c.dispose(); }
+    for (final c in _groupTotalSetsCtrl.values) { c.dispose(); }
     super.dispose();
   }
 
@@ -5988,6 +6383,13 @@ class _ProgramFlowScreenState extends State<ProgramFlowScreen> {
   void _initControllers() {
     for (final step in _steps) {
       for (final exs in step.items) {
+        // Initialize editable group config controllers (keyed by first exercise)
+        if (exs.first.groupId != null && !_groupIntervalMinCtrl.containsKey(exs.first)) {
+          _groupIntervalMinCtrl[exs.first] = TextEditingController(
+              text: (exs.first.groupIntervalMin ?? 1).toString());
+          _groupTotalSetsCtrl[exs.first] = TextEditingController(
+              text: (exs.first.groupTotalSets ?? 6).toString());
+        }
         for (final ex in exs) {
           if (_repsCtrl.containsKey(ex)) continue;
           // For single-exercise emom/emomStrength, pad to totalSets rows
@@ -6025,6 +6427,15 @@ class _ProgramFlowScreenState extends State<ProgramFlowScreen> {
 
   void _saveStepData(_FlowStep step) {
     for (final exs in step.items) {
+      // Save editable group config values to all exercises in the group
+      if (exs.first.groupId != null) {
+        final newMin = int.tryParse(_groupIntervalMinCtrl[exs.first]?.text ?? '');
+        final newTotal = int.tryParse(_groupTotalSetsCtrl[exs.first]?.text ?? '');
+        for (final ex in exs) {
+          if (newMin != null) ex.groupIntervalMin = newMin;
+          if (newTotal != null) ex.groupTotalSets = newTotal;
+        }
+      }
       for (final ex in exs) {
         final rList = _repsCtrl[ex];
         final wList = _weightCtrl[ex];
@@ -6104,19 +6515,19 @@ Widget _buildSetsTable(BuildContext context, ProgramExercise ex, {bool showStatu
           label: const Text('Add Set'),
         );
       }
-      return const Text('No sets', style: TextStyle(color: Colors.white38, fontSize: 13));
+      return Text('No sets', style: TextStyle(color: _w38, fontSize: 13));
     }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(children: [
-          const SizedBox(width: 24, child: Text('Set', style: TextStyle(fontSize: 11, color: Colors.white38))),
+          SizedBox(width: 24, child: Text('Set', style: TextStyle(fontSize: 11, color: _w38))),
           const SizedBox(width: 8),
-          const SizedBox(width: 56, child: Text('Reps', style: TextStyle(fontSize: 11, color: Colors.white38))),
+          SizedBox(width: 56, child: Text('Reps', style: TextStyle(fontSize: 11, color: _w38))),
           const SizedBox(width: 8),
-          Expanded(child: Text('Weight ($unit)', style: const TextStyle(fontSize: 11, color: Colors.white38))),
+          Expanded(child: Text('Weight ($unit)', style: TextStyle(fontSize: 11, color: _w38))),
           const SizedBox(width: 8),
-          const SizedBox(width: 48, child: Text('RPE', style: TextStyle(fontSize: 11, color: Colors.white38), textAlign: TextAlign.center)),
+          SizedBox(width: 48, child: Text('RPE', style: TextStyle(fontSize: 11, color: _w38), textAlign: TextAlign.center)),
           if (!readOnly) const SizedBox(width: 32),
           const SizedBox(width: 70),
         ]),
@@ -6193,7 +6604,7 @@ Widget _buildSetsTable(BuildContext context, ProgramExercise ex, {bool showStatu
               const SizedBox(width: 8),
               SizedBox(width: 24, child: IconButton(
                 padding: EdgeInsets.zero,
-                icon: const Icon(Icons.close, size: 16, color: Colors.white38),
+                icon: Icon(Icons.close, size: 16, color: _w38),
                 onPressed: () => setState(() {
                   rList.removeAt(i);
                   wList.removeAt(i);
@@ -6216,7 +6627,7 @@ Widget _buildSetsTable(BuildContext context, ProgramExercise ex, {bool showStatu
             icon: const Icon(Icons.add, size: 16),
             label: const Text('Add Set'),
             style: TextButton.styleFrom(
-              foregroundColor: Colors.white54,
+              foregroundColor: _w54,
               padding: const EdgeInsets.symmetric(vertical: 4),
               visualDensity: VisualDensity.compact,
             ),
@@ -6272,7 +6683,7 @@ Widget _buildSetsTable(BuildContext context, ProgramExercise ex, {bool showStatu
             borderRadius: BorderRadius.circular(6),
           ),
           child: Icon(Icons.close, size: 14,
-              color: status == SetStatus.missed ? Colors.white : Colors.white38),
+              color: status == SetStatus.missed ? Colors.white : _w38),
         ),
       ),
       const SizedBox(width: 4),
@@ -6287,7 +6698,7 @@ Widget _buildSetsTable(BuildContext context, ProgramExercise ex, {bool showStatu
             borderRadius: BorderRadius.circular(6),
           ),
           child: Icon(Icons.check, size: 14,
-              color: status == SetStatus.succeeded ? Colors.white : Colors.white38),
+              color: status == SetStatus.succeeded ? Colors.white : _w38),
         ),
       ),
     ]);
@@ -6334,10 +6745,16 @@ Widget _buildSetsTable(BuildContext context, ProgramExercise ex, {bool showStatu
     final isSingleExEmom = isEmom && exs.length == 1;
     final typeColor = type == 'emomStrength'
         ? Colors.deepPurple
-        : type == 'emom' ? Colors.orange : Colors.teal;
+        : type == 'emom' ? Colors.orange
+        : type == 'forRounds' ? Colors.indigo
+        : type == 'forTime' ? Colors.cyan.shade700
+        : Colors.teal;
     final badgeText = type == 'emomStrength'
         ? 'EMOM (Strength)'
-        : type == 'emom' ? 'EMOM' : 'AMRAP';
+        : type == 'emom' ? 'EMOM'
+        : type == 'forRounds' ? 'For Rounds'
+        : type == 'forTime' ? 'For Time'
+        : 'AMRAP';
 
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 8),
@@ -6361,15 +6778,86 @@ Widget _buildSetsTable(BuildContext context, ProgramExercise ex, {bool showStatu
                   style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: typeColor)),
             ),
             const SizedBox(height: 12),
-            // Config info (read-only display)
-            if (isEmom)
-              Row(children: [
-                Expanded(child: _buildInfoField('Min per interval', '$intervalMin', 'min')),
-                const SizedBox(width: 12),
-                Expanded(child: _buildInfoField('Total sets', '$totalSets', null)),
-              ])
-            else
-              _buildInfoField('Time cap', '$totalSets', 'min'),
+            // Config info (editable when not completed)
+            Builder(builder: (ctx) {
+              final groupDone = exs.every((e) => e.completed);
+              final iMinCtrl = _groupIntervalMinCtrl[exs.first];
+              final tSetsCtrl = _groupTotalSetsCtrl[exs.first];
+              if (groupDone || iMinCtrl == null || tSetsCtrl == null) {
+                if (isEmom) {
+                  return Row(children: [
+                    Expanded(child: _buildInfoField('Min per interval', '$intervalMin', 'min')),
+                    const SizedBox(width: 12),
+                    Expanded(child: _buildInfoField('Total sets', '$totalSets', null)),
+                  ]);
+                }
+                if (type == 'forRounds') {
+                  return _buildInfoField('Rounds', '$totalSets', 'rounds');
+                }
+                if (type == 'forTime') {
+                  return _buildInfoField('Time Cap', '$totalSets', 'min');
+                }
+                return _buildInfoField('Time cap', '$totalSets', 'min');
+              }
+              if (isEmom) {
+                return Row(children: [
+                  Expanded(child: TextField(
+                    controller: iMinCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: 'Min per interval',
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                      suffixText: 'min',
+                    ),
+                  )),
+                  const SizedBox(width: 12),
+                  Expanded(child: TextField(
+                    controller: tSetsCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: 'Total sets',
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                  )),
+                ]);
+              }
+              if (type == 'forRounds') {
+                return TextField(
+                  controller: tSetsCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Rounds',
+                    border: OutlineInputBorder(),
+                    isDense: true,
+                    suffixText: 'rounds',
+                  ),
+                );
+              }
+              if (type == 'forTime') {
+                return TextField(
+                  controller: tSetsCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Time Cap',
+                    border: OutlineInputBorder(),
+                    isDense: true,
+                    suffixText: 'min',
+                  ),
+                );
+              }
+              return TextField(
+                controller: tSetsCtrl,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Time cap',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                  suffixText: 'min',
+                ),
+              );
+            }),
             const SizedBox(height: 14),
             if (isSingleExEmom) ...[
               // Single-exercise EMOM / EMOM (Strength): per-minute rows
@@ -6415,17 +6903,17 @@ Widget _buildSetsTable(BuildContext context, ProgramExercise ex, {bool showStatu
                       const SizedBox(width: 52),
                       const SizedBox(width: 8),
                       SizedBox(width: 46, child: Text('Reps',
-                          style: const TextStyle(fontSize: 11, color: Colors.white38),
+                          style: TextStyle(fontSize: 11, color: _w38),
                           textAlign: TextAlign.center)),
                       if (isStrength) ...[
                         const SizedBox(width: 8),
                         SizedBox(width: 46, child: Text('%',
-                            style: const TextStyle(fontSize: 11, color: Colors.white38),
+                            style: TextStyle(fontSize: 11, color: _w38),
                             textAlign: TextAlign.center)),
                       ],
                       const SizedBox(width: 8),
                       SizedBox(width: 70, child: Text('Weight',
-                          style: const TextStyle(fontSize: 11, color: Colors.white38),
+                          style: TextStyle(fontSize: 11, color: _w38),
                           textAlign: TextAlign.center)),
                       if (showStatus) const SizedBox(width: 66),
                     ]),
@@ -6524,15 +7012,15 @@ Widget _buildSetsTable(BuildContext context, ProgramExercise ex, {bool showStatu
               Row(children: [
                 const SizedBox(width: 28),
                 const SizedBox(width: 8),
-                const Expanded(child: Text('Exercise',
-                    style: TextStyle(fontSize: 11, color: Colors.white38))),
+                Expanded(child: Text('Exercise',
+                    style: TextStyle(fontSize: 11, color: _w38))),
                 const SizedBox(width: 8),
-                const SizedBox(width: 56, child: Text('Reps',
-                    style: TextStyle(fontSize: 11, color: Colors.white38),
+                SizedBox(width: 56, child: Text('Reps',
+                    style: TextStyle(fontSize: 11, color: _w38),
                     textAlign: TextAlign.center)),
                 const SizedBox(width: 8),
-                const SizedBox(width: 70, child: Text('Wt / RPE',
-                    style: TextStyle(fontSize: 11, color: Colors.white38),
+                SizedBox(width: 70, child: Text('Wt / RPE',
+                    style: TextStyle(fontSize: 11, color: _w38),
                     textAlign: TextAlign.center)),
                 if (showStatus) const SizedBox(width: 66),
               ]),
@@ -6632,13 +7120,13 @@ Widget _buildSetsTable(BuildContext context, ProgramExercise ex, {bool showStatu
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(Icons.fitness_center, color: Colors.white54, size: 64),
+                Icon(Icons.fitness_center, color: _w54, size: 64),
                 const SizedBox(height: 24),
                 const Text('Workout Finished!',
                     style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 8),
                 Text(widget.dateLabel,
-                    style: const TextStyle(fontSize: 16, color: Colors.white54)),
+                    style: TextStyle(fontSize: 16, color: _w54)),
                 const SizedBox(height: 40),
                 SizedBox(
                   width: double.infinity,
@@ -6693,9 +7181,9 @@ Widget _buildSetsTable(BuildContext context, ProgramExercise ex, {bool showStatu
         children: [
           Padding(
             padding: const EdgeInsets.only(bottom: 4),
-            child: Text(sectionLabel, style: const TextStyle(
+            child: Text(sectionLabel, style: TextStyle(
                 fontSize: 12, fontWeight: FontWeight.w700,
-                color: Colors.white54, letterSpacing: 1.0)),
+                color: _w54, letterSpacing: 1.0)),
           ),
           exerciseContent,
           const SizedBox(height: 16),
@@ -6728,7 +7216,7 @@ Widget _buildSetsTable(BuildContext context, ProgramExercise ex, {bool showStatu
                   icon: const Icon(Icons.edit_outlined, size: 16),
                   label: const Text('Edit'),
                   style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.white70,
+                    foregroundColor: _w70,
                     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                     visualDensity: VisualDensity.compact,
                   ),
@@ -6781,6 +7269,16 @@ Widget _buildSetsTable(BuildContext context, ProgramExercise ex, {bool showStatu
         if (ex.groupType == 'amrap') {
           final cap = ex.groupTotalSets ?? 0;
           final label = 'AMRAP ${cap}min';
+          return name != null ? '$name: $label' : label;
+        }
+        if (ex.groupType == 'forRounds') {
+          final rounds = ex.groupTotalSets ?? 3;
+          final label = 'For Rounds ×$rounds';
+          return name != null ? '$name: $label' : label;
+        }
+        if (ex.groupType == 'forTime') {
+          final cap = ex.groupTotalSets ?? 20;
+          final label = 'For Time ${cap}min';
           return name != null ? '$name: $label' : label;
         }
         // Standalone
@@ -6963,7 +7461,7 @@ class _ProgramExerciseScreenState extends State<ProgramExerciseScreen> {
           borderRadius: BorderRadius.circular(6),
         ),
         child: Icon(icon,
-            size: 18, color: active ? Colors.white : Colors.white38),
+            size: 18, color: active ? Colors.white : _w38),
       ),
     );
   }
@@ -6988,7 +7486,7 @@ class _ProgramExerciseScreenState extends State<ProgramExerciseScreen> {
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
             child: Row(children: [
-              const Text('Unit:', style: TextStyle(color: Colors.white70)),
+              Text('Unit:', style: TextStyle(color: _w70)),
               const SizedBox(width: 12),
               SegmentedButton<String>(
                 segments: const [
@@ -7006,20 +7504,20 @@ class _ProgramExerciseScreenState extends State<ProgramExerciseScreen> {
             ]),
           ),
           // Column headers
-          const Padding(
+          Padding(
             padding: EdgeInsets.fromLTRB(16, 12, 16, 4),
             child: Row(children: [
               SizedBox(width: 28,
-                  child: Text('Set', style: TextStyle(fontSize: 11, color: Colors.white38))),
+                  child: Text('Set', style: TextStyle(fontSize: 11, color: _w38))),
               SizedBox(width: 8),
               SizedBox(width: 60,
-                  child: Text('Reps', style: TextStyle(fontSize: 11, color: Colors.white38))),
+                  child: Text('Reps', style: TextStyle(fontSize: 11, color: _w38))),
               SizedBox(width: 8),
               Expanded(
-                  child: Text('Weight', style: TextStyle(fontSize: 11, color: Colors.white38))),
+                  child: Text('Weight', style: TextStyle(fontSize: 11, color: _w38))),
               SizedBox(width: 8),
               SizedBox(width: 52,
-                  child: Text('RPE', style: TextStyle(fontSize: 11, color: Colors.white38),
+                  child: Text('RPE', style: TextStyle(fontSize: 11, color: _w38),
                       textAlign: TextAlign.center)),
               SizedBox(width: 84),
             ]),
@@ -7216,8 +7714,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             mainAxisSize: MainAxisSize.min,
             children: [
               if (!step2) ...[
-                const Text('Enter your current password to continue.',
-                    style: TextStyle(fontSize: 13, color: Colors.white70)),
+                Text('Enter your current password to continue.',
+                    style: TextStyle(fontSize: 13, color: _w70)),
                 const SizedBox(height: 16),
                 TextField(
                   controller: currentCtrl,
@@ -7305,8 +7803,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       body: ListView(
         padding: const EdgeInsets.all(24),
         children: [
-          const Text('Account Details',
-              style: TextStyle(fontSize: 13, color: Colors.white54, fontWeight: FontWeight.w600)),
+          Text('Account Details',
+              style: TextStyle(fontSize: 13, color: _w54, fontWeight: FontWeight.w600)),
           const SizedBox(height: 16),
           TextField(
             controller: _usernameCtrl,
@@ -7348,8 +7846,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 32),
           const Divider(),
           const SizedBox(height: 24),
-          const Text('Appearance',
-              style: TextStyle(fontSize: 13, color: Colors.white54, fontWeight: FontWeight.w600)),
+          Text('Appearance',
+              style: TextStyle(fontSize: 13, color: _w54, fontWeight: FontWeight.w600)),
           const SizedBox(height: 8),
           ValueListenableBuilder<ThemeMode>(
             valueListenable: themeNotifier,
@@ -7368,8 +7866,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 24),
           const Divider(),
           const SizedBox(height: 24),
-          const Text('Security',
-              style: TextStyle(fontSize: 13, color: Colors.white54, fontWeight: FontWeight.w600)),
+          Text('Security',
+              style: TextStyle(fontSize: 13, color: _w54, fontWeight: FontWeight.w600)),
           const SizedBox(height: 16),
           OutlinedButton.icon(
             icon: const Icon(Icons.lock_outline),
@@ -7593,13 +8091,13 @@ class _AdminScreenState extends State<AdminScreen> {
       padding: const EdgeInsets.only(top: 3),
       child: Row(
         children: [
-          Icon(icon, size: 12, color: Colors.white38),
+          Icon(icon, size: 12, color: _w38),
           const SizedBox(width: 4),
           Text('$label: ',
-              style: const TextStyle(fontSize: 11, color: Colors.white38)),
+              style: TextStyle(fontSize: 11, color: _w38)),
           Expanded(
             child: Text(value,
-                style: const TextStyle(fontSize: 11, color: Colors.white70),
+                style: TextStyle(fontSize: 11, color: _w70),
                 overflow: TextOverflow.ellipsis),
           ),
         ],
@@ -7814,22 +8312,6 @@ class _WorkoutDetailScreenState extends State<WorkoutDetailScreen> {
         actions: [
           if (widget.isOwnProfile) ...[
             IconButton(
-              icon: const Icon(Icons.edit_outlined),
-              onPressed: () => Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => WorkoutScreen(
-                    profile: widget.profile,
-                    editingWorkout: widget.workout,
-                    onSaved: () {
-                      setState(() {});
-                      widget.onChanged();
-                    },
-                  ),
-                ),
-              ),
-            ),
-            IconButton(
               icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
               onPressed: _deleteWorkout,
             ),
@@ -7889,6 +8371,59 @@ class _WorkoutDetailScreenState extends State<WorkoutDetailScreen> {
               ],
             ),
           ),
+          if (widget.isOwnProfile && !widget.workout.completed)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+              child: SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  icon: const Icon(Icons.check),
+                  label: const Text('Complete Workout'),
+                  onPressed: () {
+                    setState(() => widget.workout.completed = true);
+                    widget.onChanged();
+                  },
+                  style: FilledButton.styleFrom(
+                    backgroundColor: Colors.green,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                ),
+              ),
+            )
+          else if (widget.isOwnProfile && widget.workout.completed)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+              child: Center(
+                child: GestureDetector(
+                  onTap: () {
+                    setState(() => widget.workout.completed = false);
+                    widget.onChanged();
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => WorkoutScreen(
+                          profile: widget.profile,
+                          editingWorkout: widget.workout,
+                          onSaved: () {
+                            setState(() {});
+                            widget.onChanged();
+                          },
+                        ),
+                      ),
+                    );
+                  },
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(Icons.check_circle, color: Colors.green.shade400, size: 20),
+                    const SizedBox(width: 8),
+                    Text('Workout Completed',
+                        style: TextStyle(color: Colors.green.shade400, fontWeight: FontWeight.w600)),
+                    const SizedBox(width: 8),
+                    Text('(tap to undo)',
+                        style: TextStyle(color: _w38, fontSize: 12)),
+                  ]),
+                ),
+              ),
+            ),
           if (!widget.isOwnProfile)
             _CommentInputBar(
               controller: _commentCtrl,
@@ -7913,7 +8448,7 @@ class _WorkoutDetailScreenState extends State<WorkoutDetailScreen> {
                     style: const TextStyle(
                         fontSize: 17, fontWeight: FontWeight.bold)),
               ),
-              if (widget.isOwnProfile)
+              if (widget.isOwnProfile && !widget.workout.completed)
                 IconButton(
                   icon: const Icon(Icons.delete_outline,
                       color: Colors.redAccent, size: 20),
@@ -7925,14 +8460,14 @@ class _WorkoutDetailScreenState extends State<WorkoutDetailScreen> {
             const SizedBox(height: 8),
             if (widget.workout.type == WorkoutType.strength) ...[
               if (ex.sets.isEmpty)
-                const Text('No sets logged', style: TextStyle(color: Colors.white54))
+                Text('No sets logged', style: TextStyle(color: _w54))
               else ...[
-                const Row(children: [
-                  SizedBox(width: 36, child: Text('Set', style: TextStyle(fontSize: 12, color: Colors.white54))),
+                Row(children: [
+                  SizedBox(width: 36, child: Text('Set', style: TextStyle(fontSize: 12, color: _w54))),
                   SizedBox(width: 8),
-                  SizedBox(width: 52, child: Text('Reps', style: TextStyle(fontSize: 12, color: Colors.white54))),
+                  SizedBox(width: 52, child: Text('Reps', style: TextStyle(fontSize: 12, color: _w54))),
                   SizedBox(width: 8),
-                  Text('Weight', style: TextStyle(fontSize: 12, color: Colors.white54)),
+                  Text('Weight', style: TextStyle(fontSize: 12, color: _w54)),
                 ]),
                 const SizedBox(height: 4),
                 ...ex.sets.asMap().entries.map((e) {
@@ -7973,8 +8508,8 @@ class _WorkoutDetailScreenState extends State<WorkoutDetailScreen> {
               if (ex.otherType != null && ex.otherValue != null) ...[
                 const SizedBox(height: 4),
                 Text('${ex.otherType}: ${ex.otherValue}',
-                    style: const TextStyle(
-                        fontSize: 13, color: Colors.white60)),
+                    style: TextStyle(
+                        fontSize: 13, color: _w60)),
               ],
             ],
           ],
@@ -8066,10 +8601,10 @@ class _SocialSectionState extends State<_SocialSection> {
                         Text(emoji, style: const TextStyle(fontSize: 20)),
                         const SizedBox(width: 4),
                         Text('${list.length}',
-                            style: const TextStyle(
+                            style: TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w600,
-                                color: Colors.white60)),
+                                color: _w60)),
                       ],
                     ),
                   );
@@ -8112,7 +8647,7 @@ class _SocialSectionState extends State<_SocialSection> {
                               fontWeight: FontWeight.w600,
                               color: reacted
                                   ? Theme.of(context).colorScheme.onPrimaryContainer
-                                  : Colors.white60,
+                                  : _w60,
                             ),
                           ),
                         ],
@@ -8127,13 +8662,13 @@ class _SocialSectionState extends State<_SocialSection> {
           // Comments header
           Text(
             'Comments (${widget.comments.length})',
-            style: const TextStyle(
-                fontSize: 13, color: Colors.white54, fontWeight: FontWeight.w600),
+            style: TextStyle(
+                fontSize: 13, color: _w54, fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: 12),
           if (widget.comments.isEmpty)
-            const Text('No comments yet.',
-                style: TextStyle(fontSize: 13, color: Colors.white38))
+            Text('No comments yet.',
+                style: TextStyle(fontSize: 13, color: _w38))
           else
             ...widget.comments.asMap().entries.map((e) {
               final comment = e.value;
@@ -8167,21 +8702,21 @@ class _SocialSectionState extends State<_SocialSection> {
                                     fontSize: 13, fontWeight: FontWeight.w600)),
                             const SizedBox(width: 8),
                             Text(_timeAgo(comment.date),
-                                style: const TextStyle(
-                                    fontSize: 11, color: Colors.white38)),
+                                style: TextStyle(
+                                    fontSize: 11, color: _w38)),
                           ]),
                           const SizedBox(height: 3),
                           Text(comment.text,
-                              style: const TextStyle(
-                                  fontSize: 14, color: Colors.white)),
+                              style: TextStyle(
+                                  fontSize: 14, color: _wt)),
                         ],
                       ),
                     ),
                     if (isOwn)
                       GestureDetector(
                         onTap: () => widget.onDeleteComment(e.key),
-                        child: const Icon(Icons.close,
-                            size: 14, color: Colors.white38),
+                        child: Icon(Icons.close,
+                            size: 14, color: _w38),
                       ),
                   ],
                 ),
@@ -8293,14 +8828,14 @@ class _WeightCalculatorCardState extends State<_WeightCalculatorCard> {
                 Icon(Icons.calculate_outlined,
                     size: 16, color: Theme.of(context).colorScheme.primary),
                 const SizedBox(width: 6),
-                const Expanded(
+                Expanded(
                   child: Text('Weight Calculator',
-                      style: TextStyle(fontSize: 12, color: Colors.white54)),
+                      style: TextStyle(fontSize: 12, color: _w54)),
                 ),
                 Icon(
                   _expanded ? Icons.expand_less : Icons.expand_more,
                   size: 18,
-                  color: Colors.white38,
+                  color: _w38,
                 ),
               ]),
             ),
@@ -8394,7 +8929,7 @@ class _WeightCalculatorCardState extends State<_WeightCalculatorCard> {
                                       ? Theme.of(context)
                                           .colorScheme
                                           .onPrimaryContainer
-                                      : Colors.white54,
+                                      : _w54,
                                   fontWeight: FontWeight.w600,
                                 )),
                             const SizedBox(height: 2),
