@@ -1679,9 +1679,13 @@ class _HomeScreenState extends State<HomeScreen>
     // Week starts on Sunday
     final startOfWeek = DateTime(now.year, now.month, now.day)
         .subtract(Duration(days: now.weekday % 7));
-    return widget.profile.workouts
+    final regularWorkouts = widget.profile.workouts
         .where((w) => !w.date.isBefore(startOfWeek))
         .length;
+    final completedProgramDays = widget.profile.program
+        .where((d) => d.completed && !d.date.isBefore(startOfWeek))
+        .length;
+    return regularWorkouts + completedProgramDays;
   }
 
   void _editWeeklyGoal() {
@@ -5144,16 +5148,20 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
   }
 
   void _startWorkout() {
-    final exercises = _buildExerciseList();
+    // Use _outlineExercises directly — do NOT call _buildExerciseList() here,
+    // as flush() would overwrite actual workout data with planned values from _rowCtrl.
+    final exercises = _outlineExercises;
     Navigator.push(context, MaterialPageRoute(
       builder: (_) => ProgramFlowScreen(
         exercises: exercises,
         dateLabel: _dateLabel,
         onCompleted: (String? notes) {
           final n = notes?.trim().isEmpty == true ? null : notes?.trim();
-          // Use captured 'exercises' directly — do NOT call _buildExerciseList() here,
-          // as flush() would overwrite the actual workout data with planned values.
           _persistWorkout(exercises, completed: true, notes: n);
+          if (mounted) setState(() => _outlineExercises = List.of(exercises));
+        },
+        onProgressSaved: () {
+          _persistWorkout(exercises, completed: false);
           if (mounted) setState(() => _outlineExercises = List.of(exercises));
         },
       ),
@@ -5351,7 +5359,7 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
         exercises: exercises,
         intervalMin: configCtrl1.text,
         intervalSec: configCtrlSec.text,
-        totalSets: configCtrl2.text,
+        totalSets: isEmomType ? configCtrl2.text : configCtrl1.text,
       );
       section.add(_SectionItem.group(group));
     });
@@ -6174,7 +6182,9 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
   }
 
   void _openFlowAt(List<ProgramExercise> targetExs) {
-    final exercises = _buildExerciseList();
+    // Use _outlineExercises directly — do NOT call _buildExerciseList() here,
+    // as that would overwrite actual workout data with planned values from _rowCtrl.
+    final exercises = _outlineExercises;
     final stepIdx = _stepIndexFor(targetExs);
     Navigator.push(context, MaterialPageRoute(
       builder: (_) => ProgramFlowScreen(
@@ -6184,6 +6194,10 @@ class _AddProgramScreenState extends State<AddProgramScreen> {
         onCompleted: (String? notes) {
           final n = notes?.trim().isEmpty == true ? null : notes?.trim();
           _persistWorkout(exercises, completed: true, notes: n);
+          if (mounted) setState(() => _outlineExercises = List.of(exercises));
+        },
+        onProgressSaved: () {
+          _persistWorkout(exercises, completed: false);
           if (mounted) setState(() => _outlineExercises = List.of(exercises));
         },
       ),
@@ -6426,6 +6440,7 @@ class ProgramFlowScreen extends StatefulWidget {
   final List<ProgramExercise> exercises;
   final String dateLabel;
   final void Function(String? notes)? onCompleted;
+  final VoidCallback? onProgressSaved;
   final int initialStepIndex;
 
   const ProgramFlowScreen({
@@ -6433,6 +6448,7 @@ class ProgramFlowScreen extends StatefulWidget {
     required this.exercises,
     required this.dateLabel,
     this.onCompleted,
+    this.onProgressSaved,
     this.initialStepIndex = 0,
   });
 
@@ -7328,6 +7344,7 @@ Widget _buildSetsTable(BuildContext context, ProgramExercise ex, {bool showStatu
                       for (final ex in exs) { ex.completed = true; }
                     }
                   });
+                  widget.onProgressSaved?.call();
                 },
                 icon: const Icon(Icons.check, size: 16),
                 label: const Text('Mark as Done'),
